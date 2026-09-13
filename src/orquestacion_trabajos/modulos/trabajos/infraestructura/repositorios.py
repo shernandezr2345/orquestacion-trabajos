@@ -8,6 +8,11 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from orquestacion_trabajos.modulos.trabajos.aplicacion.consultas import (
+    FiltroTrabajos,
+    ResultadoCotizacionConsulta,
+    TrabajoConsulta,
+)
 from orquestacion_trabajos.modulos.trabajos.dominio.entidades import Trabajo
 from orquestacion_trabajos.modulos.trabajos.dominio.repositorios import RepositorioTrabajos
 from orquestacion_trabajos.modulos.trabajos.infraestructura.mapeadores import TrabajoMapper
@@ -183,3 +188,50 @@ class SqlAlchemyRepositorioTrabajos(RepositorioTrabajos):
         if row is None:
             return None
         return TrabajoMapper.desde_orm(row)
+
+    def consultar_por_id(self, trabajo_id: str) -> TrabajoConsulta | None:
+        row = self._sesion().get(TrabajoORM, trabajo_id)
+        return self._a_consulta(row) if row is not None else None
+
+    def consultar(self, filtro: FiltroTrabajos) -> list[TrabajoConsulta]:
+        stmt = (
+            select(TrabajoORM)
+            .order_by(TrabajoORM.creado_en.asc(), TrabajoORM.id.asc())
+            .limit(filtro.limite)
+            .offset(filtro.offset)
+        )
+        if filtro.id_solicitud is not None:
+            stmt = stmt.where(TrabajoORM.id_solicitud == filtro.id_solicitud)
+
+        rows = self._sesion().execute(stmt).scalars().all()
+        return [self._a_consulta(row) for row in rows]
+
+    @staticmethod
+    def _a_consulta(row: TrabajoORM) -> TrabajoConsulta:
+        resultado = None
+        if row.resultado_estado is not None:
+            resultado = ResultadoCotizacionConsulta(
+                estado=row.resultado_estado,
+                id_peticion=row.resultado_id_peticion,
+                id_cotizacion=row.resultado_id_cotizacion,
+                id_proveedor=row.resultado_id_proveedor,
+                importe_menor=row.resultado_importe_menor,
+                moneda=row.resultado_moneda,
+                motivo=row.resultado_motivo,
+            )
+
+        return TrabajoConsulta(
+            id=row.id,
+            estado=row.estado,
+            version=row.version,
+            creado_en=row.creado_en,
+            id_solicitud=row.id_solicitud,
+            id_partner=row.id_partner,
+            categoria=row.categoria,
+            tipo_solicitud=row.tipo_solicitud,
+            tipo_red=row.tipo_red,
+            referencia_externa=row.referencia_externa,
+            id_politica=row.id_politica,
+            version_politica=row.version_politica,
+            resultado=resultado,
+        )

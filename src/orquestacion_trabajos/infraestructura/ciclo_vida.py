@@ -103,6 +103,16 @@ class CicloVidaPulsar:
 
         logger.info("Ciclo de vida de Pulsar detenido")
 
+    def esta_listo(self) -> bool:
+        return (
+            self.consumidor_entrada is not None
+            and self.despacho_outbox is not None
+            and self.thread_consumidor is not None
+            and self.thread_despacho is not None
+            and self.thread_consumidor.is_alive()
+            and self.thread_despacho.is_alive()
+        )
+
     def _crear_consumidor_entrada(self) -> ConsumidorEntrada:
         """Crear consumidor de Entrada con sus dependencias."""
 

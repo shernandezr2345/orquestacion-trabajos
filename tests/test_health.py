@@ -20,6 +20,6 @@ def test_health_ready_returns_ready_shape() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "ready"
-    assert payload["database"] == "not_checked"
-    assert payload["pulsar"] == "not_checked"
+    assert payload["database"] == "ready"
+    assert payload["pulsar"] == "ready"
     assert isinstance(payload["consumers"], bool)

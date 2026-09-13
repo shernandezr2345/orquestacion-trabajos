@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from sqlalchemy import JSON, String, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -23,6 +25,11 @@ class TrabajoORM(Base):
     version_politica: Mapped[int] = mapped_column(nullable=False)
     estado: Mapped[str] = mapped_column(String(64), nullable=False)
     version: Mapped[int] = mapped_column(nullable=False, default=1)
+    creado_en: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        default=lambda: datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+    )
 
     resultado_estado: Mapped[str | None] = mapped_column(String(32), nullable=True)
     resultado_id_peticion: Mapped[str | None] = mapped_column(String(64), nullable=True)
