@@ -1,0 +1,27 @@
+{
+  "type": "record",
+  "name": "TrabajoCreadoV1",
+  "namespace": "orquestacion.eventos",
+  "doc": "Evento: Trabajo creado con éxito",
+  "fields": [
+    {"name": "event_id", "type": "string", "doc": "Identificador único del evento"},
+    {"name": "tipo", "type": "string", "default": "TrabajoCreado.v1"},
+    {"name": "version_contrato", "type": "int", "default": 1},
+    {"name": "instante", "type": "string", "doc": "ISO 8601 UTC"},
+    {"name": "correlacion", "type": "string", "doc": "id_solicitud de Entrada"},
+    {"name": "causacion", "type": "string", "doc": "event_id de SolicitudDePartnerListaParaAtencion"},
+    {"name": "id_trabajo", "type": "string", "doc": "Identificador único del Trabajo"},
+    {"name": "id_solicitud", "type": "string", "doc": "Referencia a SolicitudDePartnerListaParaAtencion"},
+    {"name": "id_partner", "type": "string", "doc": "Partner"},
+    {"name": "id_peticion", "type": "string", "doc": "Identificador de la petición de cotización"},
+    {"name": "referencia_externa", "type": "string", "doc": "Referencia del partner"},
+    {"name": "categoria", "type": "string", "doc": "Categoría"},
+    {"name": "tipo_solicitud", "type": "string", "doc": "SINIESTRO o INSTALACION"},
+    {"name": "tipo_red", "type": "string", "doc": "GENERAL_HDA o HOMOLOGADA_PARTNER"},
+    {"name": "id_politica", "type": "string", "doc": "Política de referencia"},
+    {"name": "version_politica", "type": "int", "doc": "Versión de política"},
+    {"name": "creado_en", "type": "string", "doc": "Timestamp de creación ISO 8601 UTC"},
+    {"name": "estado", "type": "string", "default": "PENDIENTE_COTIZACION"},
+    {"name": "version_trabajo", "type": "int", "default": 1}
+  ]
+}

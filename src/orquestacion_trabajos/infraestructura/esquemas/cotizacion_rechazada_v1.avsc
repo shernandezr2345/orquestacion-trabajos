@@ -1,0 +1,24 @@
+{
+  "type": "record",
+  "name": "CotizacionRechazadaV1",
+  "namespace": "cotizaciones.eventos",
+  "doc": "Evento: Cotización rechazada",
+  "fields": [
+    {"name": "event_id", "type": "string"},
+    {"name": "tipo", "type": "string", "default": "CotizacionRechazada.v1"},
+    {"name": "version_contrato", "type": "int", "default": 1},
+    {"name": "instante", "type": "string", "doc": "ISO 8601 UTC"},
+    {"name": "correlacion", "type": "string"},
+    {"name": "causacion", "type": "string"},
+    {"name": "id_peticion", "type": "string"},
+    {"name": "id_trabajo", "type": "string"},
+    {"name": "id_solicitud", "type": "string"},
+    {"name": "id_partner", "type": "string"},
+    {"name": "id_proveedor", "type": "string"},
+    {"name": "categoria", "type": "string"},
+    {"name": "tipo_red", "type": "string"},
+    {"name": "motivo", "type": "string", "doc": "SIN_OFERTA_PARA_CATEGORIA o SIN_PROVEEDOR_EN_RED"},
+    {"name": "version_catalogo", "type": "int"},
+    {"name": "version_cotizacion", "type": "int", "default": 1}
+  ]
+}
