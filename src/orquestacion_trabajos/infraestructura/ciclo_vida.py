@@ -7,8 +7,15 @@ from typing import TYPE_CHECKING
 
 from config.database import create_session_factory
 
-from orquestacion_trabajos.infraestructura.consumidores import ConsumidorEntrada
+from orquestacion_trabajos.infraestructura.consumidores import (
+    ConsumidorCotizacionRechazada,
+    ConsumidorCotizacionRegistrada,
+    ConsumidorEntrada,
+)
 from orquestacion_trabajos.infraestructura.despacho import DespachoOutbox
+from orquestacion_trabajos.modulos.trabajos.aplicacion.handlers.aplicar_cotizacion import (
+    AplicarCotizacionHandler,
+)
 from orquestacion_trabajos.modulos.trabajos.aplicacion.handlers.crear_trabajo import (
     CrearTrabajoHandler,
 )
@@ -32,8 +39,12 @@ class CicloVidaPulsar:
 
     def __init__(self) -> None:
         self.consumidor_entrada: ConsumidorEntrada | None = None
+        self.consumidor_cotizacion_registrada: ConsumidorCotizacionRegistrada | None = None
+        self.consumidor_cotizacion_rechazada: ConsumidorCotizacionRechazada | None = None
         self.despacho_outbox: DespachoOutbox | None = None
         self.thread_consumidor: threading.Thread | None = None
+        self.thread_cotizacion_registrada: threading.Thread | None = None
+        self.thread_cotizacion_rechazada: threading.Thread | None = None
         self.thread_despacho: threading.Thread | None = None
         self.session_factory: Callable[[], Session] | None = None
 
@@ -47,6 +58,8 @@ class CicloVidaPulsar:
 
             # Inicializar consumidor de Entrada
             self.consumidor_entrada = self._crear_consumidor_entrada()
+            self.consumidor_cotizacion_registrada = self._crear_consumidor_cotizacion_registrada()
+            self.consumidor_cotizacion_rechazada = self._crear_consumidor_cotizacion_rechazada()
 
             # Inicializar despacho de Outbox
             self.despacho_outbox = DespachoOutbox(self.session_factory)
@@ -59,6 +72,20 @@ class CicloVidaPulsar:
             )
             self.thread_consumidor.start()
             logger.info("Hilo de consumidor iniciado")
+
+            self.thread_cotizacion_registrada = threading.Thread(
+                target=self.consumidor_cotizacion_registrada.iniciar,
+                daemon=True,
+                name="ConsumidorCotizacionRegistrada",
+            )
+            self.thread_cotizacion_registrada.start()
+
+            self.thread_cotizacion_rechazada = threading.Thread(
+                target=self.consumidor_cotizacion_rechazada.iniciar,
+                daemon=True,
+                name="ConsumidorCotizacionRechazada",
+            )
+            self.thread_cotizacion_rechazada.start()
 
             # Iniciar despacho en hilo
             self.thread_despacho = threading.Thread(
@@ -84,6 +111,16 @@ class CicloVidaPulsar:
             except Exception:
                 logger.exception("Error deteniendo consumidor")
 
+        for consumidor in (
+            self.consumidor_cotizacion_registrada,
+            self.consumidor_cotizacion_rechazada,
+        ):
+            if consumidor is not None:
+                try:
+                    consumidor.desconectar()
+                except Exception:
+                    logger.exception("Error deteniendo consumidor de resultado")
+
         if self.despacho_outbox is not None:
             try:
                 self.despacho_outbox.desconectar()
@@ -95,6 +132,13 @@ class CicloVidaPulsar:
             self.thread_consumidor.join(timeout=5)
             logger.info("Hilo de consumidor detenido")
 
+        for thread in (
+            self.thread_cotizacion_registrada,
+            self.thread_cotizacion_rechazada,
+        ):
+            if thread is not None and thread.is_alive():
+                thread.join(timeout=5)
+
         if self.thread_despacho is not None and self.thread_despacho.is_alive():
             self.thread_despacho.join(timeout=5)
             logger.info("Hilo de despacho detenido")
@@ -104,10 +148,16 @@ class CicloVidaPulsar:
     def esta_listo(self) -> bool:
         return (
             self.consumidor_entrada is not None
+            and self.consumidor_cotizacion_registrada is not None
+            and self.consumidor_cotizacion_rechazada is not None
             and self.despacho_outbox is not None
             and self.thread_consumidor is not None
+            and self.thread_cotizacion_registrada is not None
+            and self.thread_cotizacion_rechazada is not None
             and self.thread_despacho is not None
             and self.thread_consumidor.is_alive()
+            and self.thread_cotizacion_registrada.is_alive()
+            and self.thread_cotizacion_rechazada.is_alive()
             and self.thread_despacho.is_alive()
         )
 
@@ -141,3 +191,22 @@ class CicloVidaPulsar:
         )
 
         return consumidor
+
+    def _crear_handler_aplicar_cotizacion(self, session: Session) -> AplicarCotizacionHandler:
+        return AplicarCotizacionHandler(
+            repositorio=SqlAlchemyRepositorioTrabajos(session),
+            registro_salidas=SqlAlchemyOutbox(session),
+            idempotencia=InMemoryIdempotencia(),
+        )
+
+    def _crear_consumidor_cotizacion_registrada(self) -> ConsumidorCotizacionRegistrada:
+        return ConsumidorCotizacionRegistrada(
+            self.session_factory,
+            self._crear_handler_aplicar_cotizacion,
+        )
+
+    def _crear_consumidor_cotizacion_rechazada(self) -> ConsumidorCotizacionRechazada:
+        return ConsumidorCotizacionRechazada(
+            self.session_factory,
+            self._crear_handler_aplicar_cotizacion,
+        )

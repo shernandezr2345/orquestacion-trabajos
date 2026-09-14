@@ -199,6 +199,7 @@ class _ConsumidorResultadoCotizacion:
         self.handler_factory = handler_factory
         self.client: pulsar.Client | None = None
         self.consumer: pulsar.Consumer | None = None
+        self._running = False
 
     def conectar(self) -> None:
         if self.client is not None:
@@ -220,12 +221,26 @@ class _ConsumidorResultadoCotizacion:
         )
 
     def desconectar(self) -> None:
+        self._running = False
         if self.consumer is not None:
             self.consumer.close()
             self.consumer = None
         if self.client is not None:
             self.client.close()
             self.client = None
+
+    def iniciar(self) -> None:
+        if self.consumer is None:
+            self.conectar()
+
+        self._running = True
+        try:
+            while self._running:
+                import time
+
+                time.sleep(1)
+        finally:
+            self.desconectar()
 
     def _procesar_mensaje(self, consumer: pulsar.Consumer, mensaje: pulsar.Message) -> None:
         session: Session = self.session_factory()
