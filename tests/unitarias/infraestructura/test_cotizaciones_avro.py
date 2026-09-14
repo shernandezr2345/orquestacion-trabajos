@@ -33,6 +33,9 @@ def _normalizar_schema(schema: dict[str, object]) -> dict[str, object]:
 
 def _registrada() -> CotizacionRegistradaV1:
     return CotizacionRegistradaV1(
+        tipo="CotizacionRegistrada.v1",
+        version_contrato=1,
+        version_cotizacion=1,
         event_id="evt-cot-1",
         instante="2026-09-13T00:00:00Z",
         correlacion="sol-1",
@@ -53,6 +56,9 @@ def _registrada() -> CotizacionRegistradaV1:
 
 def _rechazada() -> CotizacionRechazadaV1:
     return CotizacionRechazadaV1(
+        tipo="CotizacionRechazada.v1",
+        version_contrato=1,
+        version_cotizacion=1,
         event_id="evt-rech-1",
         instante="2026-09-13T00:00:00Z",
         correlacion="sol-1",
@@ -61,9 +67,6 @@ def _rechazada() -> CotizacionRechazadaV1:
         id_trabajo="trab-1",
         id_solicitud="sol-1",
         id_partner="partner-1",
-        id_proveedor="prov-1",
-        categoria="SINIESTRO",
-        tipo_red="GENERAL_HDA",
         motivo="SIN_OFERTA_PARA_CATEGORIA",
         version_catalogo=1,
     )

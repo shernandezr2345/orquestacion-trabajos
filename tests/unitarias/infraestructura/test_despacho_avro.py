@@ -194,3 +194,15 @@ def test_salidas_se_procesan_independientemente() -> None:
     assert first.estado == "PENDIENTE"
     assert second.estado == "PROCESADA"
     cotizacion_producer.send.assert_called_once()
+
+
+def test_both_publications_use_the_work_partition_key() -> None:
+    for message_type, payload in (
+        ("TrabajoCreado.v1", _trabajo_creado_payload()),
+        ("SolicitarCotizacion.v1", _solicitar_cotizacion_payload()),
+    ):
+        producer = Mock()
+        dispatcher = DespachoOutbox(Mock())
+        dispatcher.producers[message_type] = producer
+        dispatcher._publicar_salida(Mock(), _salida(message_type, payload))
+        assert producer.send.call_args.kwargs["partition_key"] == payload["id_trabajo"]

@@ -44,6 +44,9 @@ def _registrada(
     id_solicitud: str = "sol-1",
 ) -> CotizacionRegistradaV1:
     return CotizacionRegistradaV1(
+        tipo="CotizacionRegistrada.v1",
+        version_contrato=1,
+        version_cotizacion=1,
         event_id=event_id,
         instante="2026-09-13T00:00:00Z",
         correlacion=id_solicitud,
@@ -66,6 +69,9 @@ def _rechazada(
     id_trabajo: str = "trab-1", event_id: str = "evt-2", id_solicitud: str = "sol-1"
 ) -> CotizacionRechazadaV1:
     return CotizacionRechazadaV1(
+        tipo="CotizacionRechazada.v1",
+        version_contrato=1,
+        version_cotizacion=1,
         event_id=event_id,
         instante="2026-09-13T00:00:00Z",
         correlacion=id_solicitud,
@@ -74,9 +80,6 @@ def _rechazada(
         id_trabajo=id_trabajo,
         id_solicitud=id_solicitud,
         id_partner="partner-1",
-        id_proveedor="prov-1",
-        categoria="SINIESTRO",
-        tipo_red="GENERAL_HDA",
         motivo="SIN_OFERTA_PARA_CATEGORIA",
         version_catalogo=1,
     )

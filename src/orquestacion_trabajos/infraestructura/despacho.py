@@ -116,10 +116,8 @@ class DespachoOutbox:
             session.close()
 
     def _publicar_salida(self, session: Session, salida: OutboxORM) -> None:
-        """Publicar una salida a Pulsar y marcar como procesada."""
         tipo_salida = salida.tipo
 
-        # Obtener el productor correspondiente
         producer = self.producers.get(tipo_salida)
         if producer is None:
             logger.error(f"No hay productor para tipo {tipo_salida}")
@@ -130,14 +128,12 @@ class DespachoOutbox:
             logger.error("No hay Record Avro para tipo %s", tipo_salida)
             return
 
-        # Publicar a Pulsar
         try:
-            message_id = producer.send(record)
+            message_id = producer.send(record, partition_key=str(record.id_trabajo))
             logger.info(
                 f"Salida publicada: tipo={tipo_salida}, id={salida.id}, message_id={message_id}"
             )
 
-            # Marcar como procesada DESPUÉS de confirmar publicación
             salida.estado = "PROCESADA"
             salida.procesado_en = datetime.now(UTC).isoformat().replace("+00:00", "Z")
             session.commit()
@@ -149,11 +145,14 @@ class DespachoOutbox:
             raise
 
     @staticmethod
-    def _record_para_salida(salida: OutboxORM) -> object | None:
-        record_cls = {
+    def _record_para_salida(
+        salida: OutboxORM,
+    ) -> TrabajoCreadoV1 | SolicitarCotizacionV1 | None:
+        record_types: dict[str, type[TrabajoCreadoV1 | SolicitarCotizacionV1]] = {
             "TrabajoCreado.v1": TrabajoCreadoV1,
             "SolicitarCotizacion.v1": SolicitarCotizacionV1,
-        }.get(salida.tipo)
+        }
+        record_cls = record_types.get(salida.tipo)
         if record_cls is None:
             return None
         return record_cls(**dict(salida.payload))

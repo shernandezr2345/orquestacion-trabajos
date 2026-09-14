@@ -13,6 +13,8 @@ from orquestacion_trabajos.infraestructura.esquemas_python.v1.entrada import (
 
 def _record() -> SolicitudDePartnerListaParaAtencionV1:
     return SolicitudDePartnerListaParaAtencionV1(
+        tipo="SolicitudDePartnerListaParaAtencion.v1",
+        version_contrato=1,
         event_id="evt-1",
         instante="2026-09-13T00:00:00Z",
         correlacion="sol-1",
