@@ -33,7 +33,6 @@ from orquestacion_trabajos.modulos.trabajos.infraestructura.orm import (
 )
 from orquestacion_trabajos.modulos.trabajos.infraestructura.repositorios import (
     InboxConflictError,
-    SqlAlchemyOutbox,
     SqlAlchemyRepositorioTrabajos,
 )
 
@@ -173,9 +172,7 @@ def _guardar_trabajo(session_factory, id_solicitud: str = "sol-1") -> Trabajo:
 
 
 def _handler_factory(session):
-    return AplicarCotizacionHandler(
-        SqlAlchemyRepositorioTrabajos(session), SqlAlchemyOutbox(session), InMemoryIdempotencia()
-    )
+    return AplicarCotizacionHandler(SqlAlchemyRepositorioTrabajos(session), InMemoryIdempotencia())
 
 
 def test_registrada_usa_value_mapper_y_handler_con_estado_aceptada() -> None:
@@ -208,7 +205,7 @@ def test_rechazada_usa_value_mapper_y_handler_con_estado_rechazada() -> None:
     assert comando.resultado.motivo == "SIN_OFERTA_PARA_CATEGORIA"
 
 
-def test_registrada_persiste_inbox_trabajo_outbox_y_hace_ack() -> None:
+def test_registrada_persiste_inbox_trabajo_sin_outbox_y_hace_ack() -> None:
     session_factory = _session_factory()
     trabajo = _guardar_trabajo(session_factory)
     consumer = Mock()
@@ -223,11 +220,11 @@ def test_registrada_persiste_inbox_trabajo_outbox_y_hace_ack() -> None:
     with session_factory() as session:
         assert session.get(TrabajoORM, str(trabajo.id)).estado == "COTIZADO"
         assert session.query(InboxORM).one().id_mensaje == record.event_id
-        assert session.query(OutboxORM).one().tipo == "CotizacionAplicada"
+        assert session.query(OutboxORM).count() == 0
     consumer.acknowledge.assert_called_once_with(mensaje)
 
 
-def test_rechazada_persiste_inbox_trabajo_outbox_y_hace_ack() -> None:
+def test_rechazada_persiste_inbox_trabajo_sin_outbox_y_hace_ack() -> None:
     session_factory = _session_factory()
     trabajo = _guardar_trabajo(session_factory)
     consumer = Mock()
@@ -242,7 +239,7 @@ def test_rechazada_persiste_inbox_trabajo_outbox_y_hace_ack() -> None:
     with session_factory() as session:
         assert session.get(TrabajoORM, str(trabajo.id)).estado == "COTIZACION_RECHAZADA"
         assert session.query(InboxORM).one().id_mensaje == record.event_id
-        assert session.query(OutboxORM).one().tipo == "CotizacionAplicada"
+        assert session.query(OutboxORM).count() == 0
     consumer.acknowledge.assert_called_once_with(mensaje)
 
 
@@ -332,7 +329,7 @@ def test_redelivery_no_repite_efecto_y_hace_ack() -> None:
     with session_factory() as session:
         assert session.get(TrabajoORM, str(trabajo.id)).version == 2
         assert session.query(InboxORM).count() == 1
-        assert session.query(OutboxORM).count() == 1
+        assert session.query(OutboxORM).count() == 0
 
 
 def test_conflicto_inbox_no_ejecuta_negocio_ni_hace_ack() -> None:
@@ -354,7 +351,7 @@ def test_conflicto_inbox_no_ejecuta_negocio_ni_hace_ack() -> None:
     with session_factory() as session:
         assert session.get(TrabajoORM, str(trabajo.id)).version == 2
         assert session.query(InboxORM).count() == 1
-        assert session.query(OutboxORM).count() == 1
+        assert session.query(OutboxORM).count() == 0
     segundo_consumer.acknowledge.assert_not_called()
 
 

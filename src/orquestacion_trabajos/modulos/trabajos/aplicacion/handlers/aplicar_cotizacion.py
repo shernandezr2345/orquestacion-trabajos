@@ -2,9 +2,6 @@ from __future__ import annotations
 
 from orquestacion_trabajos.modulos.trabajos.aplicacion.comandos import AplicarCotizacionCommand
 from orquestacion_trabajos.modulos.trabajos.aplicacion.idempotencia import InMemoryIdempotencia
-from orquestacion_trabajos.modulos.trabajos.aplicacion.registro_salidas import (
-    RegistroSalidas,
-)
 from orquestacion_trabajos.modulos.trabajos.dominio.entidades import Trabajo
 from orquestacion_trabajos.modulos.trabajos.dominio.objetos_valor import ResultadoCotizacion
 from orquestacion_trabajos.modulos.trabajos.dominio.repositorios import RepositorioTrabajos
@@ -14,11 +11,9 @@ class AplicarCotizacionHandler:
     def __init__(
         self,
         repositorio: RepositorioTrabajos,
-        registro_salidas: RegistroSalidas,
         idempotencia: InMemoryIdempotencia,
     ) -> None:
         self.repositorio = repositorio
-        self.registro_salidas = registro_salidas
         self.idempotencia = idempotencia
 
     def ejecutar(self, comando: AplicarCotizacionCommand) -> Trabajo:
@@ -49,16 +44,4 @@ class AplicarCotizacionHandler:
 
         trabajo.aplicar_resultado(resultado, version_esperada=comando.version_esperada)
         self.repositorio.guardar(trabajo)
-
-        self.registro_salidas.registrar(
-            tipo="CotizacionAplicada",
-            payload={
-                "id_trabajo": str(trabajo.id),
-                "id_solicitud": trabajo.id_solicitud,
-                "id_partner": trabajo.id_partner,
-                "id_peticion": resultado.id_peticion,
-                "id_cotizacion": resultado.id_cotizacion,
-                "estado": resultado.estado,
-            },
-        )
         return trabajo

@@ -194,14 +194,14 @@ def test_aplicar_cotizacion_valida_actualiza_el_trabajo() -> None:
     crear = CrearTrabajoHandler(repo, unidad, registro, idempotencia)
     trabajo = crear.ejecutar(CrearTrabajoCommand(solicitud=_solicitud()))
 
-    aplicar = AplicarCotizacionHandler(repo, registro, idempotencia)
+    aplicar = AplicarCotizacionHandler(repo, idempotencia)
     resultado = _resultado_aceptado(trabajo)
 
     trabajo_actualizado = aplicar.ejecutar(AplicarCotizacionCommand(resultado=resultado))
 
     assert trabajo_actualizado.estado == TrabajoEstado.COTIZADO
     assert trabajo_actualizado.resultado is not None
-    assert registro.salidas[-1].tipo == "CotizacionAplicada"
+    assert len(registro.salidas) == 2
 
 
 def test_aplicar_cotizacion_repetida_no_generan_efectos_duplicados() -> None:
@@ -211,7 +211,7 @@ def test_aplicar_cotizacion_repetida_no_generan_efectos_duplicados() -> None:
     registro = InMemoryRegistroSalidas()
     crear = CrearTrabajoHandler(repo, unidad, registro, idempotencia)
     trabajo = crear.ejecutar(CrearTrabajoCommand(solicitud=_solicitud()))
-    aplicar = AplicarCotizacionHandler(repo, registro, idempotencia)
+    aplicar = AplicarCotizacionHandler(repo, idempotencia)
     resultado = _resultado_aceptado(trabajo)
 
     primero = aplicar.ejecutar(AplicarCotizacionCommand(resultado=resultado))
@@ -224,8 +224,7 @@ def test_aplicar_cotizacion_repetida_no_generan_efectos_duplicados() -> None:
 def test_aplicar_cotizacion_falla_si_trabajo_no_existe() -> None:
     repo = FakeRepositorio()
     idempotencia = InMemoryIdempotencia()
-    registro = InMemoryRegistroSalidas()
-    handler = AplicarCotizacionHandler(repo, registro, idempotencia)
+    handler = AplicarCotizacionHandler(repo, idempotencia)
 
     comando = AplicarCotizacionCommand(
         resultado=ResultadoCotizacionEntrada(
@@ -255,7 +254,7 @@ def test_aplicar_cotizacion_falla_si_resultado_es_ajeno() -> None:
     registro = InMemoryRegistroSalidas()
     crear = CrearTrabajoHandler(repo, unidad, registro, idempotencia)
     trabajo = crear.ejecutar(CrearTrabajoCommand(solicitud=_solicitud()))
-    handler = AplicarCotizacionHandler(repo, registro, idempotencia)
+    handler = AplicarCotizacionHandler(repo, idempotencia)
 
     resultado = ResultadoCotizacionEntrada(
         event_id=str(uuid4()),
@@ -282,7 +281,7 @@ def test_aplicar_cotizacion_falla_si_resultado_incompatible() -> None:
     registro = InMemoryRegistroSalidas()
     crear = CrearTrabajoHandler(repo, unidad, registro, idempotencia)
     trabajo = crear.ejecutar(CrearTrabajoCommand(solicitud=_solicitud()))
-    handler = AplicarCotizacionHandler(repo, registro, idempotencia)
+    handler = AplicarCotizacionHandler(repo, idempotencia)
 
     aceptada = _resultado_aceptado(trabajo)
     handler.ejecutar(AplicarCotizacionCommand(resultado=aceptada))
@@ -299,7 +298,7 @@ def test_aplicar_cotizacion_falla_si_version_esperada_invalida() -> None:
     registro = InMemoryRegistroSalidas()
     crear = CrearTrabajoHandler(repo, unidad, registro, idempotencia)
     trabajo = crear.ejecutar(CrearTrabajoCommand(solicitud=_solicitud()))
-    handler = AplicarCotizacionHandler(repo, registro, idempotencia)
+    handler = AplicarCotizacionHandler(repo, idempotencia)
 
     with pytest.raises(VersionEsperadaIncompatibleError):
         handler.ejecutar(

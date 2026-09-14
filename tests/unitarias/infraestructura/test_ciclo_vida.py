@@ -7,7 +7,6 @@ from sqlalchemy.orm import Session
 
 from orquestacion_trabajos.infraestructura.ciclo_vida import CicloVidaPulsar
 from orquestacion_trabajos.modulos.trabajos.infraestructura.repositorios import (
-    SqlAlchemyOutbox,
     SqlAlchemyRepositorioTrabajos,
 )
 
@@ -113,6 +112,4 @@ def test_factory_de_resultados_compone_dependencias_en_la_session_recibida() -> 
     handler = ciclo_vida._crear_handler_aplicar_cotizacion(session)
 
     assert isinstance(handler.repositorio, SqlAlchemyRepositorioTrabajos)
-    assert isinstance(handler.registro_salidas, SqlAlchemyOutbox)
     assert handler.repositorio._session is session
-    assert handler.registro_salidas._session is session

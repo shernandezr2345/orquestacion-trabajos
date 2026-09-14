@@ -112,7 +112,7 @@ Cada UoW usa sesión propia. No guardar una Session global compartida entre peti
 
 Partir de un bucle de despacho por instancia productora, dentro del mismo proceso FastAPI. Al escalar el servicio hay varios despachos concurrentes sobre su misma base: probar reservas también entre instancias. Si se reutilizan reservas de Entrada, conservar token de propiedad: A vencido no puede marcar/reprogramar la reserva obtenida después por B. Un envío duplicado sigue siendo posible y debe conservar ID/contenido. Usar plazos acotados, sin renovación continua ni scheduler sofisticado.
 
-No hacer transacción distribuida entre bases, ni mantener SQL abierto mientras se espera al broker. Si se genera un mensaje interno además del público, outbox registra destinos separados y solo marca el destino confirmado. No obligar a todos los servicios a reproducir los tres destinos de Entrada.
+No hacer transacción distribuida entre bases, ni mantener SQL abierto mientras se espera al broker. El Outbox de despacho registra únicamente salidas públicas con destino, contrato y productor definidos; los eventos internos no se registran allí por el solo hecho de existir. Cada salida pública conserva su destino y solo ese destino se marca al confirmarse. No obligar a todos los servicios a reproducir los tres destinos de Entrada.
 
 ## Errores sin plataforma de replay
 

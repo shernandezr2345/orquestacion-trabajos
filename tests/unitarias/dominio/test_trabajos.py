@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 
 from orquestacion_trabajos.modulos.trabajos.dominio.entidades import Trabajo, TrabajoEstado
+from orquestacion_trabajos.modulos.trabajos.dominio.eventos import CotizacionAplicada
 from orquestacion_trabajos.modulos.trabajos.dominio.excepciones import (
     CotizacionAjenaError,
     ResultadoIncompatibleError,
@@ -111,6 +112,7 @@ def test_mismo_resultado_es_idempotente_y_no_generan_segundo_evento() -> None:
 
     assert trabajo.estado == TrabajoEstado.COTIZADO
     assert len(trabajo.eventos_dominio) == primer_numero_eventos
+    assert isinstance(trabajo.eventos_dominio[-1], CotizacionAplicada)
 
 
 def test_resultado_contrario_o_incompatible_falla() -> None:

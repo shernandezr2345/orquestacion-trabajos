@@ -30,6 +30,7 @@ No todas las conversaciones contienen la misma propuesta: se retiraron recomenda
 | D16 | Saga y BFF completos para entrega 5 | No son condiciones del parcial. Estados pendientes e IDs ayudan a la continuidad, pero una cadena con reintentos no se presenta como Saga. |
 | D17 | Un Cloud Run Service por microservicio; Pulsar en VM y PostgreSQL externo | Sigue la conversación posterior: CPU disponible fuera de HTTP y una instancia habitual por servicio. Para experimentos elegir escala manual 0/1/2/4 por reproducibilidad. Clúster Pulsar explícito para entrega; standalone solo para desarrollo, sin afirmar alta disponibilidad. |
 | D18 | No esperar el código de otro compañero para iniciar | Los contratos propuestos y fixtures permiten avanzar por separado. La integración real sigue siendo un criterio obligatorio antes de declarar los cuatro servicios listos. |
+| D19 | `CotizacionAplicada` permanece como evento interno de dominio | No cruza una frontera de microservicio: no es contrato de integración y no tiene tópico Pulsar, Record Avro público ni consumidor externo. El Outbox de despacho contiene únicamente salidas de integración con destino, contrato y productor definidos; por tanto `CotizacionAplicada` no debe quedar como salida PENDIENTE indefinida. Los mensajes públicos vigentes son `SolicitudDePartnerListaParaAtencion.v1`, `TrabajoCreado.v1`, `SolicitarCotizacion.v1`, `CotizacionRegistrada.v1` y `CotizacionRechazada.v1`. |
 
 ## Alternativas consideradas
 

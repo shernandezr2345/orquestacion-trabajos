@@ -195,7 +195,6 @@ class CicloVidaPulsar:
     def _crear_handler_aplicar_cotizacion(self, session: Session) -> AplicarCotizacionHandler:
         return AplicarCotizacionHandler(
             repositorio=SqlAlchemyRepositorioTrabajos(session),
-            registro_salidas=SqlAlchemyOutbox(session),
             idempotencia=InMemoryIdempotencia(),
         )
 
