@@ -9,7 +9,7 @@ dependencies = [
   "uvicorn[standard]>=0.30.0,<1.0.0",
   "sqlalchemy>=2.0.35,<3.0.0",
   "psycopg[binary]>=3.2.1,<4.0.0",
-  "pulsar-client==3.13.0",
+  "pulsar-client[avro]==3.13.0",
 ]
 
 [dependency-groups]
@@ -34,5 +34,5 @@ files = ["src", "config", "tests"]
 warn_unused_configs = true
 
 [[tool.mypy.overrides]]
-module = ["pulsar"]
+module = ["pulsar", "pulsar.schema"]
 ignore_missing_imports = true
