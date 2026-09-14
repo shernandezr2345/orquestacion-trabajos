@@ -7,7 +7,11 @@ from typing import TYPE_CHECKING
 import pulsar
 from config.rutas import rutas
 from config.settings import settings
+from pulsar.schema import AvroSchema
 
+from orquestacion_trabajos.infraestructura.esquemas_python.v1.entrada import (
+    SolicitudDePartnerListaParaAtencionV1,
+)
 from orquestacion_trabajos.infraestructura.mapeadores_eventos import MapeadorEventoEntrada
 from orquestacion_trabajos.modulos.trabajos.aplicacion.comandos import CrearTrabajoCommand
 from orquestacion_trabajos.modulos.trabajos.infraestructura.repositorios import (
@@ -56,6 +60,7 @@ class ConsumidorEntrada:
             rutas.topico_solicitud_entrada,
             subscription_name=rutas.suscripcion_solicitud_entrada,
             consumer_type=pulsar.ConsumerType.Shared,
+            schema=AvroSchema(SolicitudDePartnerListaParaAtencionV1),
             message_listener=self._procesar_mensaje,
         )
         logger.info(
@@ -107,8 +112,8 @@ class ConsumidorEntrada:
     def _procesar_mensaje(self, consumer: pulsar.Consumer, mensaje: pulsar.Message) -> None:
         """Procesar un mensaje recibido (callback del listener)."""
         try:
-            # Deserializar el payload Avro
-            datos = json.loads(mensaje.data().decode("utf-8"))
+            record = mensaje.value()
+            datos = {nombre: getattr(record, nombre) for nombre in record._fields}
             event_id = str(datos.get("event_id", ""))
             id_solicitud = str(datos.get("id_solicitud", ""))
 
