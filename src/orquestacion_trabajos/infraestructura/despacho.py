@@ -1,15 +1,19 @@
 from __future__ import annotations
 
-import json
 import logging
 from datetime import UTC, datetime
 
 import pulsar
 from config.rutas import rutas
 from config.settings import settings
+from pulsar.schema import AvroSchema
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from orquestacion_trabajos.infraestructura.esquemas_python.v1.orquestacion import (
+    SolicitarCotizacionV1,
+    TrabajoCreadoV1,
+)
 from orquestacion_trabajos.modulos.trabajos.infraestructura.orm import OutboxORM
 
 logger = logging.getLogger(__name__)
@@ -37,12 +41,14 @@ class DespachoOutbox:
         # Crear productor para SolicitarCotizacion.v1
         self.producers["SolicitarCotizacion.v1"] = self.client.create_producer(
             rutas.topico_solicitar_cotizacion,
+            schema=AvroSchema(SolicitarCotizacionV1),
         )
         logger.info(f"Productor creado para {rutas.topico_solicitar_cotizacion}")
 
         # Crear productor para TrabajoCreado.v1
         self.producers["TrabajoCreado.v1"] = self.client.create_producer(
             rutas.topico_trabajo_creado,
+            schema=AvroSchema(TrabajoCreadoV1),
         )
         logger.info(f"Productor creado para {rutas.topico_trabajo_creado}")
 
@@ -119,13 +125,14 @@ class DespachoOutbox:
             logger.error(f"No hay productor para tipo {tipo_salida}")
             return
 
-        # Serializar payload
-        payload_json = json.dumps(salida.payload)
-        payload_bytes = payload_json.encode("utf-8")
+        record = self._record_para_salida(salida)
+        if record is None:
+            logger.error("No hay Record Avro para tipo %s", tipo_salida)
+            return
 
         # Publicar a Pulsar
         try:
-            message_id = producer.send(payload_bytes)
+            message_id = producer.send(record)
             logger.info(
                 f"Salida publicada: tipo={tipo_salida}, id={salida.id}, message_id={message_id}"
             )
@@ -140,3 +147,13 @@ class DespachoOutbox:
             logger.exception("Error publicando salida %s", salida.id)
             session.rollback()
             raise
+
+    @staticmethod
+    def _record_para_salida(salida: OutboxORM) -> object | None:
+        record_cls = {
+            "TrabajoCreado.v1": TrabajoCreadoV1,
+            "SolicitarCotizacion.v1": SolicitarCotizacionV1,
+        }.get(salida.tipo)
+        if record_cls is None:
+            return None
+        return record_cls(**dict(salida.payload))
