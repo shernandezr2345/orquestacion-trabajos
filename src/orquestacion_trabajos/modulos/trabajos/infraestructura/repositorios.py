@@ -13,6 +13,7 @@ from orquestacion_trabajos.modulos.trabajos.aplicacion.consultas import (
     ResultadoCotizacionConsulta,
     TrabajoConsulta,
 )
+from orquestacion_trabajos.modulos.trabajos.aplicacion.registro_salidas import RegistroSalidas
 from orquestacion_trabajos.modulos.trabajos.dominio.entidades import Trabajo
 from orquestacion_trabajos.modulos.trabajos.dominio.repositorios import RepositorioTrabajos
 from orquestacion_trabajos.modulos.trabajos.infraestructura.mapeadores import TrabajoMapper
@@ -86,7 +87,7 @@ class SqlAlchemyInbox:
         return row is not None
 
 
-class SqlAlchemyOutbox:
+class SqlAlchemyOutbox(RegistroSalidas):
     def __init__(self, session: Session | Callable[[], Session]) -> None:
         self._session = session
 

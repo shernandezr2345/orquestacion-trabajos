@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from config.rutas import rutas
+
+from orquestacion_trabajos.infraestructura.mapeadores_eventos import MapeadorTrabajoAvro
 from orquestacion_trabajos.modulos.trabajos.aplicacion.comandos import CrearTrabajoCommand
 from orquestacion_trabajos.modulos.trabajos.aplicacion.idempotencia import InMemoryIdempotencia
 from orquestacion_trabajos.modulos.trabajos.aplicacion.registro_salidas import (
-    InMemoryRegistroSalidas,
+    RegistroSalidas,
 )
-from orquestacion_trabajos.modulos.trabajos.aplicacion.unidad_trabajo import InMemoryUnidadTrabajo
+from orquestacion_trabajos.modulos.trabajos.aplicacion.unidad_trabajo import UnidadTrabajo
 from orquestacion_trabajos.modulos.trabajos.dominio.entidades import Trabajo
 from orquestacion_trabajos.modulos.trabajos.dominio.objetos_valor import (
     CondicionesAtencion,
@@ -18,8 +21,8 @@ class CrearTrabajoHandler:
     def __init__(
         self,
         repositorio: RepositorioTrabajos,
-        unidad_trabajo: InMemoryUnidadTrabajo,
-        registro_salidas: InMemoryRegistroSalidas,
+        unidad_trabajo: UnidadTrabajo,
+        registro_salidas: RegistroSalidas,
         idempotencia: InMemoryIdempotencia,
     ) -> None:
         self.repositorio = repositorio
@@ -60,36 +63,20 @@ class CrearTrabajoHandler:
         self.idempotencia.registrar(clave_solicitud, {"id_solicitud": solicitud.id_solicitud})
 
         self.repositorio.guardar(trabajo)
-        self.unidad_trabajo.confirmar()
 
-        self.registro_salidas.registrar(
-            "TrabajoCreado.v1",
-            {
-                "id_trabajo": str(trabajo.id),
-                "id_solicitud": trabajo.id_solicitud,
-                "id_partner": trabajo.id_partner,
-                "categoria": trabajo.categoria,
-                "tipo_solicitud": trabajo.tipo_solicitud,
-                "tipo_red": trabajo.tipo_red,
-                "referencia_externa": trabajo.referencia_externa,
-                "id_politica": trabajo.id_politica,
-                "version_politica": trabajo.version_politica,
-                "version_trabajo": trabajo.version,
-            },
+        trabajo_creado = MapeadorTrabajoAvro.trabajo_a_trabajo_creado(trabajo, solicitud.event_id)
+        solicitar_cotizacion = MapeadorTrabajoAvro.trabajo_a_solicitar_cotizacion(
+            trabajo, solicitud.event_id
         )
         self.registro_salidas.registrar(
-            "SolicitarCotizacion.v1",
-            {
-                "id_peticion": str(trabajo.id),
-                "id_trabajo": str(trabajo.id),
-                "id_solicitud": trabajo.id_solicitud,
-                "id_partner": trabajo.id_partner,
-                "categoria": trabajo.categoria,
-                "tipo_solicitud": trabajo.tipo_solicitud,
-                "tipo_red": trabajo.tipo_red,
-                "id_politica": trabajo.id_politica,
-                "version_politica": trabajo.version_politica,
-            },
+            tipo="TrabajoCreado.v1",
+            payload=trabajo_creado,
+            destino=rutas.topico_trabajo_creado,
+        )
+        self.registro_salidas.registrar(
+            tipo="SolicitarCotizacion.v1",
+            payload=solicitar_cotizacion,
+            destino=rutas.topico_solicitar_cotizacion,
         )
 
         return trabajo

@@ -7,7 +7,15 @@ from config.settings import settings
 from sqlalchemy import Engine, create_engine, select
 from sqlalchemy.orm import sessionmaker
 
-from orquestacion_trabajos.modulos.trabajos.aplicacion.comandos import SolicitudListaParaAtencion
+from orquestacion_trabajos.modulos.trabajos.aplicacion.comandos import (
+    CrearTrabajoCommand,
+    SolicitudListaParaAtencion,
+)
+from orquestacion_trabajos.modulos.trabajos.aplicacion.handlers.crear_trabajo import (
+    CrearTrabajoHandler,
+)
+from orquestacion_trabajos.modulos.trabajos.aplicacion.idempotencia import InMemoryIdempotencia
+from orquestacion_trabajos.modulos.trabajos.aplicacion.unidad_trabajo import InMemoryUnidadTrabajo
 from orquestacion_trabajos.modulos.trabajos.dominio.entidades import Trabajo
 from orquestacion_trabajos.modulos.trabajos.dominio.objetos_valor import (
     CondicionesAtencion,
@@ -328,6 +336,64 @@ def test_outbox_real_persiste_salida_pendiente() -> None:
     assert row.destino == "trabajos"
     assert row.payload == payload
     assert row.estado == "PENDIENTE"
+
+
+def test_crear_trabajo_registra_dos_salidas_outbox_antes_del_commit() -> None:
+    engine = _engine_postgresql()
+    Session = sessionmaker(bind=engine, expire_on_commit=False)
+    solicitud = _solicitud()
+
+    with Session() as session:
+        repo = SqlAlchemyRepositorioTrabajos(session)
+        outbox = SqlAlchemyOutbox(session)
+        handler = CrearTrabajoHandler(
+            repositorio=repo,
+            unidad_trabajo=InMemoryUnidadTrabajo(),
+            registro_salidas=outbox,
+            idempotencia=InMemoryIdempotencia(),
+        )
+
+        trabajo = handler.ejecutar(CrearTrabajoCommand(solicitud=solicitud))
+
+        pendientes_en_la_sesion = (
+            session.execute(select(OutboxORM).where(OutboxORM.estado == "PENDIENTE"))
+            .scalars()
+            .all()
+        )
+        assert {salida.tipo for salida in pendientes_en_la_sesion} == {
+            "TrabajoCreado.v1",
+            "SolicitarCotizacion.v1",
+        }
+
+        with Session() as otra_sesion:
+            antes_del_commit = (
+                otra_sesion.execute(
+                    select(OutboxORM).where(
+                        OutboxORM.payload["id_trabajo"].as_string() == str(trabajo.id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert antes_del_commit == []
+
+        session.commit()
+
+    with Session() as session:
+        despues_del_commit = (
+            session.execute(
+                select(OutboxORM).where(
+                    OutboxORM.payload["id_trabajo"].as_string() == str(trabajo.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    assert {salida.tipo for salida in despues_del_commit} == {
+        "TrabajoCreado.v1",
+        "SolicitarCotizacion.v1",
+    }
 
 
 def test_unidad_trabajo_confirma_y_revertir() -> None:

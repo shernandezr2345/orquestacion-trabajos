@@ -13,10 +13,8 @@ from orquestacion_trabajos.modulos.trabajos.aplicacion.handlers.crear_trabajo im
     CrearTrabajoHandler,
 )
 from orquestacion_trabajos.modulos.trabajos.aplicacion.idempotencia import InMemoryIdempotencia
-from orquestacion_trabajos.modulos.trabajos.aplicacion.registro_salidas import (
-    InMemoryRegistroSalidas,
-)
 from orquestacion_trabajos.modulos.trabajos.infraestructura.repositorios import (
+    SqlAlchemyOutbox,
     SqlAlchemyRepositorioTrabajos,
 )
 from orquestacion_trabajos.modulos.trabajos.infraestructura.unidad_trabajo import (
@@ -116,21 +114,6 @@ class CicloVidaPulsar:
     def _crear_consumidor_entrada(self) -> ConsumidorEntrada:
         """Crear consumidor de Entrada con sus dependencias."""
 
-        def crear_handler_con_sesion(session):
-            """Factory para crear handler con una sesión específica."""
-            repo = SqlAlchemyRepositorioTrabajos(session)
-            uow = SQLAlchemyUnidadTrabajo(session)
-            registro_salidas = InMemoryRegistroSalidas()
-            idempotencia = InMemoryIdempotencia()
-
-            handler = CrearTrabajoHandler(
-                repositorio=repo,
-                unidad_trabajo=uow,
-                registro_salidas=registro_salidas,
-                idempotencia=idempotencia,
-            )
-            return handler
-
         # Crear consumidor con factory de handler
         class HandlerFactory:
             def __init__(self, session_factory):
@@ -139,7 +122,7 @@ class CicloVidaPulsar:
             def crear_handler(self, session):
                 repo = SqlAlchemyRepositorioTrabajos(session)
                 uow = SQLAlchemyUnidadTrabajo(session)
-                registro_salidas = InMemoryRegistroSalidas()
+                registro_salidas = SqlAlchemyOutbox(session)
                 idempotencia = InMemoryIdempotencia()
                 return CrearTrabajoHandler(
                     repositorio=repo,
