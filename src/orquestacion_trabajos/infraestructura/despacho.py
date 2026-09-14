@@ -132,7 +132,10 @@ class DespachoOutbox:
 
         # Publicar a Pulsar
         try:
-            message_id = producer.send(record)
+            message_id = producer.send(
+                record,
+                partition_key=str(salida.payload["id_trabajo"]),
+            )
             logger.info(
                 f"Salida publicada: tipo={tipo_salida}, id={salida.id}, message_id={message_id}"
             )

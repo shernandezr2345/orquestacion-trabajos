@@ -117,10 +117,28 @@ def test_publicar_salida_envia_record_y_marca_procesada_despues() -> None:
 
     enviado = producer.send.call_args.args[0]
     assert isinstance(enviado, TrabajoCreadoV1)
+    assert producer.send.call_args.kwargs["partition_key"] == "trab-1"
     assert salida.estado == "PROCESADA"
     assert salida.procesado_en is not None
     session.commit.assert_called_once()
     session.rollback.assert_not_called()
+
+
+def test_solicitar_cotizacion_envia_el_record_sin_alterar_y_con_partition_key() -> None:
+    producer = Mock()
+    producer.send.return_value = "message-id"
+    session = Mock()
+    dispatcher = DespachoOutbox(Mock())
+    dispatcher.producers["SolicitarCotizacion.v1"] = producer
+    payload = _solicitar_cotizacion_payload()
+    salida = _salida("SolicitarCotizacion.v1", payload)
+
+    dispatcher._publicar_salida(session, salida)
+
+    enviado = producer.send.call_args.args[0]
+    assert isinstance(enviado, SolicitarCotizacionV1)
+    assert enviado.id_trabajo == payload["id_trabajo"]
+    assert producer.send.call_args.kwargs["partition_key"] == payload["id_trabajo"]
 
 
 def test_fallo_de_publicacion_hace_rollback_y_deja_pendiente() -> None:
