@@ -9,11 +9,21 @@ from config.rutas import rutas
 from config.settings import settings
 from pulsar.schema import AvroSchema
 
+from orquestacion_trabajos.infraestructura.esquemas_python.v1.cotizaciones import (
+    CotizacionRechazadaV1,
+    CotizacionRegistradaV1,
+)
 from orquestacion_trabajos.infraestructura.esquemas_python.v1.entrada import (
     SolicitudDePartnerListaParaAtencionV1,
 )
-from orquestacion_trabajos.infraestructura.mapeadores_eventos import MapeadorEventoEntrada
-from orquestacion_trabajos.modulos.trabajos.aplicacion.comandos import CrearTrabajoCommand
+from orquestacion_trabajos.infraestructura.mapeadores_eventos import (
+    MapeadorEventoEntrada,
+    MapeadorResultadoCotizacion,
+)
+from orquestacion_trabajos.modulos.trabajos.aplicacion.comandos import (
+    AplicarCotizacionCommand,
+    CrearTrabajoCommand,
+)
 from orquestacion_trabajos.modulos.trabajos.infraestructura.repositorios import (
     SqlAlchemyInbox,
 )
@@ -176,3 +186,72 @@ class ConsumidorEntrada:
 
         except Exception:
             logger.exception("Error crítico en procesador de mensajes")
+
+
+class _ConsumidorResultadoCotizacion:
+    tipo_evento: str
+    topico: str
+    suscripcion: str
+    schema_record: type
+
+    def __init__(self, handler_factory) -> None:
+        self.handler_factory = handler_factory
+        self.client: pulsar.Client | None = None
+        self.consumer: pulsar.Consumer | None = None
+
+    def conectar(self) -> None:
+        if self.client is not None:
+            return
+
+        self.client = pulsar.Client(settings.pulsar_url)
+        self.consumer = self.client.subscribe(
+            self.topico,
+            subscription_name=self.suscripcion,
+            consumer_type=pulsar.ConsumerType.Shared,
+            schema=AvroSchema(self.schema_record),
+            message_listener=self._procesar_mensaje,
+        )
+        logger.info(
+            "Consumer de %s creado para %s con suscripción %s",
+            self.tipo_evento,
+            self.topico,
+            self.suscripcion,
+        )
+
+    def desconectar(self) -> None:
+        if self.consumer is not None:
+            self.consumer.close()
+            self.consumer = None
+        if self.client is not None:
+            self.client.close()
+            self.client = None
+
+    def _procesar_mensaje(self, _consumer: pulsar.Consumer, mensaje: pulsar.Message) -> None:
+        record = mensaje.value()
+        datos = {nombre: getattr(record, nombre) for nombre in record._fields}
+        resultado = self._mapear_resultado(datos)
+        comando = AplicarCotizacionCommand(resultado=resultado)
+        self.handler_factory().ejecutar(comando)
+
+    def _mapear_resultado(self, datos: dict[str, object]):
+        raise NotImplementedError
+
+
+class ConsumidorCotizacionRegistrada(_ConsumidorResultadoCotizacion):
+    tipo_evento = "CotizacionRegistrada.v1"
+    topico = rutas.topico_cotizacion_registrada
+    suscripcion = rutas.suscripcion_cotizacion_registrada
+    schema_record = CotizacionRegistradaV1
+
+    def _mapear_resultado(self, datos: dict[str, object]):
+        return MapeadorResultadoCotizacion.cotizacion_registrada_a_resultado(datos)
+
+
+class ConsumidorCotizacionRechazada(_ConsumidorResultadoCotizacion):
+    tipo_evento = "CotizacionRechazada.v1"
+    topico = rutas.topico_cotizacion_rechazada
+    suscripcion = rutas.suscripcion_cotizacion_rechazada
+    schema_record = CotizacionRechazadaV1
+
+    def _mapear_resultado(self, datos: dict[str, object]):
+        return MapeadorResultadoCotizacion.cotizacion_rechazada_a_resultado(datos)
