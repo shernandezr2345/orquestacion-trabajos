@@ -95,6 +95,8 @@ El consumidor de Orquestación verifica que petición, trabajo, solicitud y part
 
 TrabajoCreado incluye envelope de evento y `id_trabajo`, `id_solicitud`, `id_partner`, `id_peticion` (UUID string), `referencia_externa`, `categoria`, `tipo_solicitud`, `tipo_red`, `id_politica`, `version_politica`, `creado_en` (UTC), `estado="PENDIENTE_COTIZACION"` y `version_trabajo=1`. El record se llama `TrabajoCreadoV1`. Orquestación crea este evento y el comando de cotización en la misma transacción que el Trabajo, con dos salidas independientes. No garantizar orden entre sus publicaciones.
 
+El schema Avro de `TrabajoCreado.v1` usa namespace `orquestacion.eventos` y clave de partición `id_trabajo`. Sus defaults Avro son `tipo="TrabajoCreado.v1"`, `version_contrato=1`, `estado="PENDIENTE_COTIZACION"` y `version_trabajo=1`.
+
 **E3 reformulado:** la revisión 2 de CotizacionRegistrada agrega solamente `duracion_estimada_minutos`, tipo Avro `['null','int']`, default null. Es la duración de ejecución estimada en la oferta sintética del proveedor, no un plazo de comienzo, compromiso SLA ni duración observada. Si se informa, debe ser >0; null es desconocido y no se convierte a cero.
 
 El dato pertenece al catálogo de Cotizaciones: se carga en una nueva versión, se copia a la resolución persistida antes del outbox y no se relee al reenviar. El escritor v1 omite el campo; el escritor v2 lo envía cuando existe. Generar nuevas peticiones para nuevas ofertas; una petición ya resuelta conserva su resultado original. No enriquecer un evento antiguo con el mismo ID ni republicar históricos como si fueran nuevos.
