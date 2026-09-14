@@ -147,7 +147,7 @@ class TestMapeadorResultadoCotizacion:
 
         assert resultado.event_id == "evt-cot-123"
         assert resultado.id_trabajo == "trab-456"
-        assert resultado.estado == "COTIZADO"
+        assert resultado.estado == "ACEPTADA"
         assert resultado.importe_menor == 5000000
         assert resultado.moneda == "COP"
 
@@ -168,5 +168,5 @@ class TestMapeadorResultadoCotizacion:
 
         assert resultado.event_id == "evt-rech-123"
         assert resultado.id_trabajo == "trab-456"
-        assert resultado.estado == "COTIZACION_RECHAZADA"
+        assert resultado.estado == "RECHAZADA"
         assert resultado.motivo == "SIN_OFERTA_PARA_CATEGORIA"
