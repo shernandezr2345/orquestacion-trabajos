@@ -194,7 +194,8 @@ class _ConsumidorResultadoCotizacion:
     suscripcion: str
     schema_record: type
 
-    def __init__(self, handler_factory) -> None:
+    def __init__(self, session_factory, handler_factory) -> None:
+        self.session_factory = session_factory
         self.handler_factory = handler_factory
         self.client: pulsar.Client | None = None
         self.consumer: pulsar.Consumer | None = None
@@ -226,12 +227,36 @@ class _ConsumidorResultadoCotizacion:
             self.client.close()
             self.client = None
 
-    def _procesar_mensaje(self, _consumer: pulsar.Consumer, mensaje: pulsar.Message) -> None:
-        record = mensaje.value()
-        datos = {nombre: getattr(record, nombre) for nombre in record._fields}
-        resultado = self._mapear_resultado(datos)
-        comando = AplicarCotizacionCommand(resultado=resultado)
-        self.handler_factory().ejecutar(comando)
+    def _procesar_mensaje(self, consumer: pulsar.Consumer, mensaje: pulsar.Message) -> None:
+        session: Session = self.session_factory()
+        try:
+            record = mensaje.value()
+            datos = {nombre: getattr(record, nombre) for nombre in record._fields}
+            resultado = self._mapear_resultado(datos)
+            contenido = json.dumps(datos, sort_keys=True, default=str)
+            inbox = SqlAlchemyInbox(session)
+            ya_procesado = inbox.ya_procesado(
+                consumidor=self.suscripcion,
+                id_mensaje=resultado.event_id,
+            )
+            inbox.registrar(
+                consumidor=self.suscripcion,
+                id_mensaje=resultado.event_id,
+                contenido=contenido,
+            )
+
+            if not ya_procesado:
+                comando = AplicarCotizacionCommand(resultado=resultado)
+                self.handler_factory(session).ejecutar(comando)
+
+            session.commit()
+            consumer.acknowledge(mensaje)
+        except Exception:
+            session.rollback()
+            logger.exception("Error procesando resultado de cotización")
+            raise
+        finally:
+            session.close()
 
     def _mapear_resultado(self, datos: dict[str, object]):
         raise NotImplementedError
