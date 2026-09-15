@@ -7,10 +7,10 @@ from typing import cast
 import pytest
 from pulsar.schema import AvroSchema, Record
 
-from orquestacion_trabajos.infraestructura.esquemas_python.v1.entrada import (
+from orquestacion_trabajos.modulos.trabajos.infraestructura.esquemas.v1.entrada import (
     SolicitudDePartnerListaParaAtencionV1,
 )
-from orquestacion_trabajos.infraestructura.esquemas_python.v1.orquestacion import (
+from orquestacion_trabajos.modulos.trabajos.infraestructura.esquemas.v1.orquestacion import (
     SolicitarCotizacionV1,
     TrabajoCreadoV1,
 )
@@ -19,7 +19,16 @@ ROOT = Path(__file__).parents[3]
 
 
 def _schema_path(name: str) -> Path:
-    return ROOT / "src" / "orquestacion_trabajos" / "infraestructura" / "esquemas" / name
+    return (
+        ROOT
+        / "src"
+        / "orquestacion_trabajos"
+        / "modulos"
+        / "trabajos"
+        / "infraestructura"
+        / "contratos"
+        / name
+    )
 
 
 def _normalizar_schema(schema: dict[str, object]) -> dict[str, object]:
@@ -53,6 +62,8 @@ def test_records_corresponden_exactamente_con_los_avsc() -> None:
 
 def test_solicitud_record_instancia_payload_valido_y_default_opcional() -> None:
     record = SolicitudDePartnerListaParaAtencionV1(
+        tipo="SolicitudDePartnerListaParaAtencion.v1",
+        version_contrato=1,
         event_id="evt-1",
         instante="2026-09-13T00:00:00Z",
         correlacion="sol-1",
@@ -144,6 +155,8 @@ def test_no_se_acepta_none_en_un_campo_requerido() -> None:
 
 def test_avro_schema_se_construye_y_hace_round_trip_binario() -> None:
     entrada = SolicitudDePartnerListaParaAtencionV1(
+        tipo="SolicitudDePartnerListaParaAtencion.v1",
+        version_contrato=1,
         event_id="evt-1",
         instante="2026-09-13T00:00:00Z",
         correlacion="sol-1",

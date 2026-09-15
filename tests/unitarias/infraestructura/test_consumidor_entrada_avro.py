@@ -1,18 +1,15 @@
-from __future__ import annotations
-
 from unittest.mock import Mock
 
-from config.rutas import rutas
-from pulsar.schema import AvroSchema
-
-from orquestacion_trabajos.infraestructura.consumidores import ConsumidorEntrada
-from orquestacion_trabajos.infraestructura.esquemas_python.v1.entrada import (
+from orquestacion_trabajos.modulos.trabajos.infraestructura.consumidores import procesador
+from orquestacion_trabajos.modulos.trabajos.infraestructura.esquemas.v1.entrada import (
     SolicitudDePartnerListaParaAtencionV1,
 )
 
 
 def _record() -> SolicitudDePartnerListaParaAtencionV1:
     return SolicitudDePartnerListaParaAtencionV1(
+        tipo="SolicitudDePartnerListaParaAtencion.v1",
+        version_contrato=1,
         event_id="evt-1",
         instante="2026-09-13T00:00:00Z",
         correlacion="sol-1",
@@ -28,26 +25,10 @@ def _record() -> SolicitudDePartnerListaParaAtencionV1:
     )
 
 
-def test_conectar_configura_topic_subscription_shared_y_avro_schema(monkeypatch) -> None:
-    client = Mock()
-    monkeypatch.setattr("pulsar.Client", Mock(return_value=client))
-    consumidor = ConsumidorEntrada(Mock(), Mock(), Mock())
-
-    consumidor.conectar()
-
-    kwargs = client.subscribe.call_args.kwargs
-    assert client.subscribe.call_args.args[0] == rutas.topico_solicitud_entrada
-    assert kwargs["subscription_name"] == rutas.suscripcion_solicitud_entrada
-    assert kwargs["consumer_type"].name == "Shared"
-    assert isinstance(kwargs["schema"], AvroSchema)
-    assert kwargs["message_listener"] == consumidor._procesar_mensaje
-
-
-def test_record_avro_se_adapta_a_dict_para_el_mapper() -> None:
-    record = _record()
-    datos = {nombre: getattr(record, nombre) for nombre in record._fields}
-
-    assert datos["event_id"] == "evt-1"
-    assert datos["id_solicitud"] == "sol-1"
-    assert datos["id_partner"] == "partner-1"
-    assert datos["version_politica"] == 1
+def test_entry_adapter_preserves_complete_envelope():
+    crear = Mock()
+    procesador("entrada", "test", crear, Mock())(Mock(value=Mock(return_value=_record())))
+    comando = crear.ejecutar.call_args.args[0]
+    assert comando.solicitud.event_id == "evt-1"
+    assert '"version_solicitud": 2' in comando.contenido
+    assert comando.consumidor == "test"

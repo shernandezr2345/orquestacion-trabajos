@@ -1,0 +1,87 @@
+{
+  "type": "record",
+  "name": "TrabajoCreadoV1",
+  "namespace": "orquestacion.eventos",
+  "fields": [
+    {
+      "name": "event_id",
+      "type": "string"
+    },
+    {
+      "name": "tipo",
+      "default": "TrabajoCreado.v1",
+      "type": "string"
+    },
+    {
+      "name": "version_contrato",
+      "default": 1,
+      "type": "int"
+    },
+    {
+      "name": "instante",
+      "type": "string"
+    },
+    {
+      "name": "correlacion",
+      "type": "string"
+    },
+    {
+      "name": "causacion",
+      "type": "string"
+    },
+    {
+      "name": "id_trabajo",
+      "type": "string"
+    },
+    {
+      "name": "id_solicitud",
+      "type": "string"
+    },
+    {
+      "name": "id_partner",
+      "type": "string"
+    },
+    {
+      "name": "id_peticion",
+      "type": "string"
+    },
+    {
+      "name": "referencia_externa",
+      "type": "string"
+    },
+    {
+      "name": "categoria",
+      "type": "string"
+    },
+    {
+      "name": "tipo_solicitud",
+      "type": "string"
+    },
+    {
+      "name": "tipo_red",
+      "type": "string"
+    },
+    {
+      "name": "id_politica",
+      "type": "string"
+    },
+    {
+      "name": "version_politica",
+      "type": "int"
+    },
+    {
+      "name": "creado_en",
+      "type": "string"
+    },
+    {
+      "name": "estado",
+      "default": "PENDIENTE_COTIZACION",
+      "type": "string"
+    },
+    {
+      "name": "version_trabajo",
+      "default": 1,
+      "type": "int"
+    }
+  ]
+}

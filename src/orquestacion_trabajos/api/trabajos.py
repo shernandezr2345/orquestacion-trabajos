@@ -2,20 +2,14 @@ from __future__ import annotations
 
 from collections.abc import Generator
 
-from config.database import SessionLocal
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
+from orquestacion_trabajos.config.bootstrap import componer_consulta
 from orquestacion_trabajos.modulos.trabajos.aplicacion.consultas import (
     FiltroTrabajos,
     TrabajoConsulta,
-)
-from orquestacion_trabajos.modulos.trabajos.aplicacion.handlers.consultar_trabajos import (
-    ConsultarTrabajosHandler,
-)
-from orquestacion_trabajos.modulos.trabajos.infraestructura.repositorios import (
-    SqlAlchemyRepositorioTrabajos,
 )
 
 router = APIRouter(prefix="/trabajos", tags=["trabajos"])
@@ -51,8 +45,11 @@ class TrabajoResponse(BaseModel):
     resultado: ResultadoCotizacionResponse | None
 
 
-def _session() -> Generator[Session, None, None]:
-    session = SessionLocal()
+def _session(request: Request) -> Generator[Session, None, None]:
+    database = request.app.state.database
+    if database is None:
+        raise HTTPException(status_code=503, detail="Persistencia no disponible")
+    session = database.session_factory()
     try:
         yield session
     finally:
@@ -68,7 +65,7 @@ def _respuesta(consulta: TrabajoConsulta) -> TrabajoResponse:
 
 @router.get("/{trabajo_id}", response_model=TrabajoResponse)
 def obtener_trabajo(trabajo_id: str, session: Session = session_dependency) -> TrabajoResponse:
-    trabajo = ConsultarTrabajosHandler(SqlAlchemyRepositorioTrabajos(session)).por_id(trabajo_id)
+    trabajo = componer_consulta(session).por_id(trabajo_id)
     if trabajo is None:
         raise HTTPException(status_code=404, detail="Trabajo no encontrado")
     return _respuesta(trabajo)
@@ -82,5 +79,5 @@ def listar_trabajos(
     session: Session = session_dependency,
 ) -> list[TrabajoResponse]:
     filtro = FiltroTrabajos(id_solicitud=id_solicitud, limite=limite, offset=offset)
-    trabajos = ConsultarTrabajosHandler(SqlAlchemyRepositorioTrabajos(session)).listar(filtro)
+    trabajos = componer_consulta(session).listar(filtro)
     return [_respuesta(trabajo) for trabajo in trabajos]

@@ -95,14 +95,9 @@ class Trabajo(Entidad):
         if self.resultado is not None:
             if self.resultado == resultado:
                 return
-            if self.resultado.es_aceptada() and resultado.es_rechazada():
-                raise ResultadoIncompatibleError(
-                    "Una cotización aceptada no puede ser reempleazada por un rechazo"
-                )
-            if self.resultado.es_rechazada() and resultado.es_aceptada():
-                raise ResultadoIncompatibleError(
-                    "Una cotización rechazada no puede ser reemplazada por una aceptación"
-                )
+            raise ResultadoIncompatibleError(
+                "Un resultado terminal no puede ser reemplazado por otro resultado"
+            )
 
         if resultado.es_aceptada():
             self.estado = TrabajoEstado.COTIZADO

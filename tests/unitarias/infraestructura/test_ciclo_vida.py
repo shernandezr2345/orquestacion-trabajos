@@ -1,115 +1,91 @@
-from __future__ import annotations
-
-from typing import ClassVar
+import asyncio
+from threading import Event
 from unittest.mock import Mock
 
-from sqlalchemy.orm import Session
+import pytest
 
-from orquestacion_trabajos.infraestructura.ciclo_vida import CicloVidaPulsar
-from orquestacion_trabajos.modulos.trabajos.infraestructura.repositorios import (
-    SqlAlchemyRepositorioTrabajos,
-)
-
-
-class _ThreadDouble:
-    instancias: ClassVar[list[_ThreadDouble]] = []
-
-    def __init__(self, *, target, daemon: bool, name: str) -> None:
-        self.target = target
-        self.daemon = daemon
-        self.name = name
-        self.iniciado = False
-        self.unido = False
-        self.instancias.append(self)
-
-    def start(self) -> None:
-        self.iniciado = True
-        self.target()
-
-    def is_alive(self) -> bool:
-        return self.iniciado
-
-    def join(self, timeout: int) -> None:
-        self.unido = True
+from orquestacion_trabajos.config.bootstrap import Componente
+from orquestacion_trabajos.config.procesamiento import procesar_eventos
+from orquestacion_trabajos.config.settings import Settings
 
 
-class _ComponenteDouble:
-    def __init__(self, *args, **kwargs) -> None:
-        self.args = args
-        self.kwargs = kwargs
-        self.inicios = 0
-        self.detenciones = 0
+def test_processing_starts_five_independent_cycles_and_closes_them(monkeypatch):
+    executed = [Event() for _ in range(5)]
+    closed = [Event() for _ in range(5)]
 
-    def iniciar(self) -> None:
-        self.inicios += 1
+    def component(index):
+        def step():
+            executed[index].set()
+            return False
 
-    def desconectar(self) -> None:
-        self.detenciones += 1
-
-
-def test_ciclo_vida_inicia_y_detiene_los_tres_consumidores(monkeypatch) -> None:
-    def session_factory() -> Session:
-        raise AssertionError("El lifecycle no debe abrir sesiones globales")
-
-    entrada = _ComponenteDouble()
-    registrada = _ComponenteDouble()
-    rechazada = _ComponenteDouble()
-    despacho = _ComponenteDouble()
-    _ThreadDouble.instancias = []
+        return Componente(str(index), step, closed[index].set)
 
     monkeypatch.setattr(
-        "orquestacion_trabajos.infraestructura.ciclo_vida.create_session_factory",
-        lambda: session_factory,
+        "orquestacion_trabajos.config.procesamiento.componer_componentes",
+        lambda *args: [component(index) for index in range(5)],
     )
     monkeypatch.setattr(
-        CicloVidaPulsar,
-        "_crear_consumidor_entrada",
-        lambda _self: entrada,
+        "orquestacion_trabajos.config.persistencia.verificar_destinos", lambda *args: None
+    )
+
+    async def run():
+        settings = Settings(
+            database_url="postgresql+psycopg://localhost/test", enable_lifespan_consumers=True
+        )
+        async with procesar_eventos(Mock(), settings) as processing:
+            assert all(event.wait(1) for event in executed)
+            assert len(processing.ciclos) == 5
+            assert all(not ciclo.hilo.daemon for ciclo in processing.ciclos)
+        assert all(event.is_set() for event in closed)
+        assert all(not ciclo.hilo.is_alive() for ciclo in processing.ciclos)
+
+    asyncio.run(run())
+
+
+def test_processing_disabled_does_not_compose(monkeypatch):
+    compose = Mock(side_effect=AssertionError("unexpected composition"))
+    monkeypatch.setattr("orquestacion_trabajos.config.procesamiento.componer_componentes", compose)
+
+    async def run():
+        async with procesar_eventos(Mock(), Settings()) as processing:
+            assert processing is None
+
+    asyncio.run(run())
+
+
+def test_startup_failure_closes_previously_started_cycle(monkeypatch):
+    from orquestacion_trabajos.seedwork.infraestructura.ciclos import Ciclo
+
+    closed = Event()
+    monkeypatch.setattr(
+        "orquestacion_trabajos.config.persistencia.verificar_destinos", lambda *args: None
     )
     monkeypatch.setattr(
-        CicloVidaPulsar,
-        "_crear_consumidor_cotizacion_registrada",
-        lambda _self: registrada,
+        "orquestacion_trabajos.config.procesamiento.componer_componentes",
+        lambda *args: [
+            Componente("first", lambda: False, closed.set),
+            Componente("second", lambda: False, lambda: None),
+        ],
     )
-    monkeypatch.setattr(
-        CicloVidaPulsar,
-        "_crear_consumidor_cotizacion_rechazada",
-        lambda _self: rechazada,
-    )
-    monkeypatch.setattr(
-        "orquestacion_trabajos.infraestructura.ciclo_vida.DespachoOutbox",
-        lambda _factory: despacho,
-    )
-    monkeypatch.setattr(
-        "orquestacion_trabajos.infraestructura.ciclo_vida.threading.Thread",
-        _ThreadDouble,
-    )
+    original = Ciclo.iniciar
 
-    ciclo_vida = CicloVidaPulsar()
-    ciclo_vida.iniciar()
+    def start(self):
+        if self.nombre == "second":
+            raise RuntimeError("cannot start")
+        original(self)
 
-    assert ciclo_vida.session_factory is session_factory
-    assert entrada.inicios == registrada.inicios == rechazada.inicios == 1
-    assert ciclo_vida.esta_listo()
-    assert [thread.name for thread in _ThreadDouble.instancias] == [
-        "ConsumidorEntrada",
-        "ConsumidorCotizacionRegistrada",
-        "ConsumidorCotizacionRechazada",
-        "DespachoOutbox",
-    ]
+    monkeypatch.setattr(Ciclo, "iniciar", start)
 
-    ciclo_vida.detener()
+    async def run():
+        with pytest.raises(RuntimeError, match="cannot start"):
+            async with procesar_eventos(
+                Mock(),
+                Settings(
+                    database_url="postgresql+psycopg://localhost/test",
+                    enable_lifespan_consumers=True,
+                ),
+            ):
+                pass
 
-    assert entrada.detenciones == registrada.detenciones == rechazada.detenciones == 1
-    assert despacho.detenciones == 1
-    assert all(thread.unido for thread in _ThreadDouble.instancias)
-
-
-def test_factory_de_resultados_compone_dependencias_en_la_session_recibida() -> None:
-    session: Session = Mock(spec=Session)
-    ciclo_vida = CicloVidaPulsar()
-
-    handler = ciclo_vida._crear_handler_aplicar_cotizacion(session)
-
-    assert isinstance(handler.repositorio, SqlAlchemyRepositorioTrabajos)
-    assert handler.repositorio._session is session
+    asyncio.run(run())
+    assert closed.is_set()

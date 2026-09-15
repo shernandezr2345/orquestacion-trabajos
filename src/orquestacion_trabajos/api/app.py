@@ -1,88 +1,81 @@
-from __future__ import annotations
+from collections.abc import AsyncIterator, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from typing import Annotated, cast
 
-import logging
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from fastapi import Depends, FastAPI, Request
+from fastapi.responses import JSONResponse
+from sqlalchemy.exc import SQLAlchemyError
 
-from config.database import engine
-from config.settings import settings
-from fastapi import FastAPI
-from sqlalchemy import text
+from orquestacion_trabajos.api.trabajos import router
+from orquestacion_trabajos.config.database import Database, create_database
+from orquestacion_trabajos.config.procesamiento import Procesamiento, procesar_eventos
+from orquestacion_trabajos.config.settings import Settings
 
-from orquestacion_trabajos.api.trabajos import router as trabajos_router
-from orquestacion_trabajos.infraestructura.ciclo_vida import CicloVidaPulsar
 
-logger = logging.getLogger(__name__)
+def get_settings(request: Request) -> Settings:
+    return cast(Settings, request.app.state.settings)
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    app.state.db_ready = True
-    app.state.pulsar_ready = False
-    app.state.consumers_started = False
-    app.state.ciclo_vida_pulsar = None
-
-    if settings.enable_lifespan_consumers:
-        try:
-            logger.info("Iniciando ciclo de vida de Pulsar en lifespan")
-            ciclo_vida = CicloVidaPulsar()
-            ciclo_vida.iniciar()
-            app.state.ciclo_vida_pulsar = ciclo_vida
-            app.state.consumers_started = True
-            app.state.pulsar_ready = True
-            logger.info("Ciclo de vida de Pulsar iniciado correctamente")
-        except Exception:
-            logger.exception("Error iniciando Pulsar en lifespan")
-            app.state.consumers_started = False
-            app.state.pulsar_ready = False
-
+async def sin_procesamiento(database: Database, settings: Settings) -> AsyncIterator[None]:
     yield
 
-    # Shutdown
-    if app.state.ciclo_vida_pulsar is not None:
+
+def create_app(
+    settings: Settings | None = None,
+    database_factory: Callable[[str], Database] = create_database,
+    processing_factory: Callable[
+        [Database, Settings], AbstractAsyncContextManager[Procesamiento | None]
+    ] = procesar_eventos,
+) -> FastAPI:
+    configuration = settings if settings is not None else Settings.from_environment()
+
+    @asynccontextmanager
+    async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+        database = (
+            database_factory(configuration.database_url) if configuration.database_url else None
+        )
+        application.state.database = database
+        procesamiento: Procesamiento | None = None
         try:
-            logger.info("Deteniendo ciclo de vida de Pulsar")
-            app.state.ciclo_vida_pulsar.detener()
-        except Exception:
-            logger.exception("Error deteniendo Pulsar")
+            if database is None:
+                yield
+            else:
+                async with processing_factory(database, configuration) as procesamiento:
+                    application.state.procesamiento = procesamiento
+                    yield
+        finally:
+            application.state.procesamiento = None
+            application.state.database = None
+            if database is not None and (
+                procesamiento is None
+                or not any(ciclo.hilo.is_alive() for ciclo in procesamiento.ciclos)
+            ):
+                database.close()
 
-    app.state.db_ready = False
-    app.state.pulsar_ready = False
-    app.state.consumers_started = False
+    application = FastAPI(title="Orquestación de Trabajos", lifespan=lifespan)
 
+    async def persistence_failure(request: Request, error: Exception) -> JSONResponse:
+        return JSONResponse({"detail": "Persistencia temporalmente no disponible"}, status_code=503)
 
-def create_app() -> FastAPI:
-    app = FastAPI(title="Orquestacion Trabajos", version="0.1.0", lifespan=lifespan)
-    app.include_router(trabajos_router)
+    application.add_exception_handler(SQLAlchemyError, persistence_failure)
+    application.state.settings = configuration
+    application.state.database = None
+    application.state.procesamiento = None
 
-    @app.get("/health/live")
-    async def health_live() -> dict[str, str]:
-        return {"status": "ok"}
+    @application.get("/health/live", tags=["health"])
+    def liveness(settings: Annotated[Settings, Depends(get_settings)]) -> dict[str, str]:
+        return {"status": "ok", "service": "orquestacion-trabajos"}
 
-    @app.get("/health/ready")
-    async def health_ready() -> dict[str, object]:
-        database_ready = False
-        try:
-            with engine.connect() as connection:
-                connection.execute(text("SELECT 1"))
-            database_ready = True
-        except Exception:
-            logger.exception("PostgreSQL no disponible para readiness")
+    @application.get("/health/ready", tags=["health"])
+    def readiness(request: Request) -> JSONResponse:
+        procesamiento = request.app.state.procesamiento
+        if procesamiento is None:
+            return JSONResponse(
+                {"status": "unavailable", "motivo": "procesamiento_desactivado"}, status_code=503
+            )
+        salud = procesamiento.salud()
+        return JSONResponse(salud, status_code=200 if salud["status"] == "ok" else 503)
 
-        if settings.enable_lifespan_consumers:
-            ciclo_vida = app.state.ciclo_vida_pulsar
-            pulsar_ready = ciclo_vida is not None and ciclo_vida.esta_listo()
-        else:
-            pulsar_ready = True
-
-        return {
-            "status": "ready" if database_ready and pulsar_ready else "not_ready",
-            "database": "ready" if database_ready else "not_ready",
-            "pulsar": "ready" if pulsar_ready else "not_ready",
-            "consumers": app.state.consumers_started,
-        }
-
-    return app
-
-
-app = create_app()
+    application.include_router(router)
+    return application

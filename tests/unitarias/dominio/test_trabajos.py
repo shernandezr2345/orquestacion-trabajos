@@ -44,7 +44,7 @@ def _resultado_aceptado(trabajo: Trabajo) -> ResultadoCotizacion:
         id_trabajo=str(trabajo.id),
         id_solicitud=str(trabajo.id_solicitud),
         id_partner=str(trabajo.id_partner),
-        id_peticion=str(uuid4()),
+        id_peticion=str(trabajo.id),
         id_cotizacion=str(uuid4()),
         id_proveedor=str(uuid4()),
         estado="ACEPTADA",
@@ -60,7 +60,7 @@ def _resultado_rechazado(trabajo: Trabajo) -> ResultadoCotizacion:
         id_trabajo=str(trabajo.id),
         id_solicitud=str(trabajo.id_solicitud),
         id_partner=str(trabajo.id_partner),
-        id_peticion=str(uuid4()),
+        id_peticion=str(trabajo.id),
         id_cotizacion=str(uuid4()),
         id_proveedor=str(uuid4()),
         estado="RECHAZADA",
@@ -191,3 +191,38 @@ def test_los_datos_propios_de_creacion_se_conservan() -> None:
     assert trabajo.referencia_externa == solicitud.referencia_externa
     assert trabajo.id_politica == solicitud.id_politica
     assert trabajo.version_politica == solicitud.version_politica
+
+
+def test_rejection_does_not_require_fields_absent_from_its_contract() -> None:
+    from dataclasses import replace
+
+    trabajo = Trabajo.crear(_solicitud(), _condiciones())
+    rejected = replace(_resultado_rechazado(trabajo), categoria="", tipo_red="")
+    trabajo.aplicar_resultado(rejected)
+    assert trabajo.estado == TrabajoEstado.COTIZACION_RECHAZADA
+
+
+@pytest.mark.parametrize("accepted", [True, False])
+def test_terminal_result_cannot_be_replaced(accepted: bool) -> None:
+    from dataclasses import replace
+
+    work = Trabajo.crear(_solicitud(), _condiciones())
+    original = _resultado_aceptado(work) if accepted else _resultado_rechazado(work)
+    work.aplicar_resultado(original)
+    conflicting = (
+        replace(original, importe_menor=1) if accepted else replace(original, motivo="OTRO")
+    )
+    with pytest.raises(ResultadoIncompatibleError):
+        work.aplicar_resultado(conflicting)
+    assert work.resultado == original
+    assert work.version == 2
+
+
+def test_result_for_another_request_is_rejected() -> None:
+    from dataclasses import replace
+
+    work = Trabajo.crear(_solicitud(), _condiciones())
+    result = replace(_resultado_aceptado(work), id_peticion="another-request")
+    with pytest.raises(CotizacionAjenaError):
+        work.aplicar_resultado(result)
+    assert work.version == 1

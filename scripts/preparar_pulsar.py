@@ -8,8 +8,11 @@ import logging
 import sys
 
 import pulsar
-from config.rutas import rutas
-from config.settings import settings
+
+from orquestacion_trabajos.config.rutas import destinos, fuentes
+from orquestacion_trabajos.config.settings import Settings
+
+settings = Settings.from_environment()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,13 +46,9 @@ class PreparadorPulsar:
             logger.error("Cliente Pulsar no conectado")
             return False
 
-        topicos = [
-            rutas.topico_solicitud_entrada,
-            rutas.topico_solicitar_cotizacion,
-            rutas.topico_trabajo_creado,
-            rutas.topico_cotizacion_registrada,
-            rutas.topico_cotizacion_rechazada,
-        ]
+        topicos = [fuente.topico for fuente in fuentes(settings)] + list(
+            destinos(settings).values()
+        )
 
         for topico in topicos:
             try:
@@ -69,11 +68,7 @@ class PreparadorPulsar:
             logger.error("Cliente Pulsar no conectado")
             return False
 
-        suscripciones = [
-            (rutas.topico_solicitud_entrada, rutas.suscripcion_solicitud_entrada),
-            (rutas.topico_cotizacion_registrada, rutas.suscripcion_cotizacion_registrada),
-            (rutas.topico_cotizacion_rechazada, rutas.suscripcion_cotizacion_rechazada),
-        ]
+        suscripciones = [(fuente.topico, fuente.suscripcion) for fuente in fuentes(settings)]
 
         for topico, nombre_suscripcion in suscripciones:
             try:
@@ -97,13 +92,9 @@ class PreparadorPulsar:
             logger.error("Cliente Pulsar no conectado")
             return False
 
-        topicos_esperados = [
-            rutas.topico_solicitud_entrada,
-            rutas.topico_solicitar_cotizacion,
-            rutas.topico_trabajo_creado,
-            rutas.topico_cotizacion_registrada,
-            rutas.topico_cotizacion_rechazada,
-        ]
+        topicos_esperados = [fuente.topico for fuente in fuentes(settings)] + list(
+            destinos(settings).values()
+        )
 
         logger.info("\nTópicos esperados:")
         for topico in topicos_esperados:

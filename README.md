@@ -1,146 +1,113 @@
 # Orquestación de Trabajos
 
-**Estado:** Bloques 01-05 Implementados  
-**Próximo:** Bloque 06 — Consultas de Trabajo
+POC de la entrega 4. Consume solicitudes de Entrada, crea un Trabajo y publica
+`TrabajoCreado.v1` y `SolicitarCotizacion.v1`. Aplica el resultado real de Cotizaciones
+y expone consultas HTTP. Cada servicio conserva su propia base.
 
 ## Estructura
 
-- **Bloque 01** (Base Tecnológica): Entorno, app instalable, dependencias  
-- **Bloque 02** (Modelo): Agregado Trabajo, eventos de dominio  
-- **Bloque 03** (Aplicación): Casos de uso, UoW en memoria, idempotencia  
-- **Bloque 04** (PostgreSQL + Inbox/Outbox): Persistencia real, transacciones atómicas  
-- **Bloque 05** (Pulsar): Consumo de Entrada, publicación de resultados ✅ **ACTUAL**
+Todo el código instalable vive en `src/orquestacion_trabajos/`:
 
-## Configuración Rápida
+- `api/`: consultas HTTP y salud.
+- `config/rutas.py`: catálogo de fuentes (tópico y suscripción) y destinos de publicación.
+- `config/bootstrap.py`: construye handlers, consumidores y despacho con sus dependencias.
+- `config/persistencia.py`: compone la UoW y verifica los destinos pendientes.
+- `config/procesamiento.py`: compone cinco ciclos y coordina su cierre con presupuesto total.
+- `config/settings.py` y `database.py`: configuración y conexiones.
+- `modulos/trabajos/dominio/`: Trabajo y reglas de transición.
+- `modulos/trabajos/aplicacion/`: casos de uso y puertos; no importa SQL, Pulsar ni mapeadores de infraestructura.
+- `modulos/trabajos/infraestructura/`: repositorios, UoW, consumidores, despacho y esquemas Avro.
+- `seedwork/aplicacion/`: contrato de UoW y errores de persistencia.
+- `seedwork/infraestructura/`: metadata, inbox/outbox, UoW SQL, consumidor, publicador y ciclos genéricos.
+- `seedwork/dominio/`: entidades, valores y eventos locales.
 
-### Instalación
+[Correcciones de esta POC](docs/correcciones-poc-2026-09-14.md).
+[Contratos](docs/contratos/README.md).
 
-```bash
-uv sync --extra dev
-```
-
-### Variables de Entorno
-
-Copiar `.env.example` a `.env`:
-
-```bash
-ORQUESTACION_DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/orquestacion_trabajos
-ORQUESTACION_PULSAR_URL=pulsar://localhost:6650
-ORQUESTACION_ENABLE_LIFESPAN_CONSUMERS=false  # true para activar consumidores Pulsar
-```
-
-### Base de Datos
+## Ejecutar localmente
 
 ```bash
-# Crear BD y tablas (primera vez)
-uv run python -c "from config.database import engine; from orquestacion_trabajos.modulos.trabajos.infraestructura.orm import Base; Base.metadata.create_all(engine)"
-```
-
-### Pulsar (para Bloque 05+)
-
-```bash
-# Preparar tópicos y suscripciones
-uv run scripts/preparar_pulsar.py --pulsar-url pulsar://localhost:6650
-```
-
-## Ejecución
-
-### Sin Consumidores (Desarrollo Local)
-
-```bash
-uv run uvicorn src.orquestacion_trabajos.api.app:app --host 0.0.0.0 --port 8001
-```
-
-API disponible en http://0.0.0.0:8001  
-/health/live, /health/ready
-
-### Con Consumidores (Bloque 05+)
-
-```bash
+uv sync --locked --group dev
+export ORQUESTACION_DATABASE_URL='postgresql+psycopg://postgres:postgres@localhost:5432/orquestacion_trabajos'
+export ORQUESTACION_PULSAR_URL='pulsar://localhost:6650'
 export ORQUESTACION_ENABLE_LIFESPAN_CONSUMERS=true
-uv run uvicorn src.orquestacion_trabajos.api.app:app --host 0.0.0.0 --port 8001
+uv run --locked alembic upgrade head
+uv run --locked python scripts/preparar_pulsar.py
+uv run --locked uvicorn orquestacion_trabajos.api.app:create_app --factory --host 127.0.0.1 --port 8001
 ```
 
-- ConsumidorEntrada: escucha en solicitud-partner-lista-v1
-- DespachoOutbox: publica SolicitarCotizacion.v1 y TrabajoCreado.v1
-- Ambos en hilos daemon del lifespan
+Crear previamente la base elegida. `.env.example` es una plantilla: copiarla a `.env`
+no carga sus variables automáticamente. El arranque usa las variables exportadas.
+`ORQUESTACION_ENABLE_LIFESPAN_CONSUMERS=false` permite servir consultas sin mensajería; readiness responde 503.
+Sin `ORQUESTACION_DATABASE_URL`, liveness sigue disponible y las consultas responden 503.
+Cada app crea y cierra su propio engine; importar módulos no crea recursos globales.
 
-## Validación
+Consultas: `GET /trabajos/{id}` y `GET /trabajos?id_solicitud=…`.
+`/health/live` responde 200; `/health/ready` responde 503 cuando falla la base,
+no están conectados los componentes requeridos, hay un consumidor pausado o falla el despacho.
+La salud no reemplaza una prueba de publicación de extremo a extremo.
+
+## Verificar
+
+La suite recrea tablas: `ORQUESTACION_DATABASE_URL` debe apuntar a una base
+exclusiva de pruebas, nunca a la base con datos de una demostración.
 
 ```bash
-# Pruebas unitarias (Bloques 01-05)
-uv run pytest tests -q
-
-# Linting y formato
-uv run ruff check .
-uv run ruff format --check .
-
-# Tipos
-uv run mypy src tests scripts config
-
-# Distribución
-uv run python -c "import orquestacion_trabajos; print('✓ Importación exitosa')"
+uv run --locked pytest tests -q
+uv run --locked ruff check src tests scripts migraciones
+uv run --locked ruff format --check src tests scripts migraciones
+uv run --locked mypy src tests migraciones
+uv run --locked python scripts/export_contracts.py --check
+uv run --locked python scripts/verify_distribution.py
 ```
 
-## Rutas de Pulsar
+Para probar los cuatro microservicios desde la raíz del workspace:
 
-| Tópico | Suscripción | Dirección |
-|--------|-------------|-----------|
-| solicitud-partner-lista-v1 | orquestacion-solicitudes-v1 | Entrada → Orquestación |
-| solicitar-cotizacion-v1 | cotizaciones-peticiones-v1 | Orquestación → Cotizaciones |
-| trabajo-creado-v1 | seguimiento-trabajos-v1 | Orquestación → Seguimiento |
-| cotizacion-registrada-v1 | orquestacion-cotizacion-registrada-v1 | Cotizaciones → Orquestación (futuro) |
-| cotizacion-rechazada-v1 | orquestacion-cotizacion-rechazada-v1 | Cotizaciones → Orquestación (futuro) |
-
-Ver [docs/contratos/README.md](docs/contratos/README.md) para flujo completo.
-
-## Documentación
-
-- [Decisiones y Alcance](docs/transversal/00-decisiones-y-alcance.md)
-- [Contratos y Datos](docs/transversal/01-contratos-y-datos.md)
-- [Base de Implementación](docs/transversal/02-base-de-implementacion.md)
-- [Flujo y Contratos Bloque 05](docs/contratos/README.md)
-- [Reporte Bloque 05](REPORTE_BLOQUE_05.md)
-- [Diseño Bloque 04 (Versionado Optimista)](docs/04-versionado-optimista.md)
-
-## Arquitectura
-
-### Capas
-
-```
-api/app.py (FastAPI lifespan)
-    ↓
-infraestructura/ciclo_vida.py (consumidores en hilos)
-    ├─ infraestructura/consumidores.py (Pulsar → BD)
-    └─ infraestructura/despacho.py (BD → Pulsar)
-    ↓
-aplicacion/handlers/ (casos de uso)
-    ↓
-dominio/ (Trabajo, reglas)
-    ↓
-infraestructura/repositorios.py (persistencia)
-    ├─ ORM (Trabajo, Inbox, Outbox)
-    └─ UoW (transacciones atómicas)
+```bash
+python proyecto/entrega4/integracion/scripts/run_local.py
 ```
 
-### Garantías
+## Garantías y límites
 
-- **Idempotencia:** Inbox (UNIQUE consumidor + event_id)
-- **Durabilidad:** UoW atómico (Trabajo + Inbox + Outbox)
-- **ACK Tardío:** Confirmación SOLO después de commit
-- **Recuperación:** Outbox persistente ante fallos de Pulsar
+- El handler abre la UoW y confirma Inbox, Trabajo y salidas en una misma transacción.
+  El consumidor genérico hace ACK solo después del retorno exitoso.
+- Una reentrega compara el mensaje completo; un resultado terminal distinto se rechaza.
+- La petición del resultado debe corresponder al Trabajo y las actualizaciones SQL
+  comprueban la versión leída para evitar sobrescrituras concurrentes.
+- El despacho procesa una fila por transacción usando `FOR UPDATE SKIP LOCKED`.
+  Conserva la fila pendiente si falla la publicación y vuelve a intentar.
+- La entrega es al menos una vez: caer después del envío y antes del commit puede
+  repetir el mismo mensaje; la deduplicación pertenece al consumidor.
+- Los errores transitorios conocidos hacen NACK. Un mensaje contradictorio pausa el consumidor
+  sin ACK; conservar la evidencia y corregir la causa antes de reiniciar.
+- Cinco ciclos no daemon: entrada, registrada, rechazada, TrabajoCreado y SolicitarCotizacion.
+  La parada se señala a todos y comparte un presupuesto de 9 segundos. Cada hilo cierra su transporte.
+  Si un hilo sigue vivo, el cierre falla visiblemente y no se dispone su engine.
+- Se mantienen tablas y variables de esta POC. El outbox conserva bloqueo SQL durante el envío
+  (una fila por destino); no incorpora las reservas con vencimiento de Entrada.
+  La validación exhaustiva del envelope y la inyección de reloj/IDs del plan 02 siguen pendientes.
 
-## Próximo Bloque
+Pulsar/SQL tienen esperas acotadas de conexión y publicación. Esto no constituye
+una certificación de alta disponibilidad ni de cierre bajo todas las fallas posibles.
 
-**Bloque 06 — Consultas de Trabajo**
+## Migraciones
 
-- GET /trabajos/{id}
-- GET /trabajos?estado=...
-- Proyección / Seguimiento opcional
-- Aplicador de resultados de Cotizaciones
+`migraciones/versions/0001_persistencia.py` crea el esquema inicial equivalente al ORM.
+Las revisiones contienen operaciones explícitas y no dependen del modelo futuro.
+La API no crea tablas; ejecutar `uv run --locked alembic upgrade head` antes de arrancarla.
 
----
+```bash
+uv run --locked alembic current
+uv run --locked alembic check
+uv run --locked alembic revision --autogenerate -m "describe_schema_change"
+```
 
-**Puertos Locales:** 8001 (Orquestación), 5432 (PostgreSQL), 6650 (Pulsar)
+Revisar cada revisión generada antes de aplicarla. Se requiere
+`ORQUESTACION_DATABASE_URL` explícita. Para revisar el SQL sin conexión:
+`uv run --locked alembic upgrade head --sql`.
 
-**Estructura:** src/orquestacion_trabajos/modulos/trabajos/{dominio, aplicacion, infraestructura}
+Las bases antiguas creadas con `create_all` no se adoptan automáticamente. Esta
+línea base se aplica a una base nueva; conservar las bases anteriores. Adoptar una
+base existente requiere comprobar su esquema y datos antes de decidir cómo registrar
+su versión. No usar `stamp head` para omitir esa revisión. `downgrade base` elimina
+las tres tablas y solo se prueba sobre bases temporales.
