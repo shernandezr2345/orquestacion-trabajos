@@ -1,208 +1,130 @@
-from __future__ import annotations
-
+import os
 from unittest.mock import Mock
 
-from config.rutas import rutas
-from pulsar.schema import AvroSchema
+import pytest
+from sqlalchemy import create_engine, event, select
+from sqlalchemy.orm import Session, sessionmaker
 
-from orquestacion_trabajos.infraestructura.despacho import DespachoOutbox
-from orquestacion_trabajos.infraestructura.esquemas_python.v1.orquestacion import (
-    SolicitarCotizacionV1,
+from orquestacion_trabajos.config.bootstrap import componer_despacho
+from orquestacion_trabajos.config.database import Database
+from orquestacion_trabajos.config.persistencia import verificar_destinos
+from orquestacion_trabajos.config.settings import Settings
+from orquestacion_trabajos.modulos.trabajos.infraestructura.despacho import publicacion
+from orquestacion_trabajos.modulos.trabajos.infraestructura.esquemas.v1.orquestacion import (
     TrabajoCreadoV1,
 )
-from orquestacion_trabajos.modulos.trabajos.infraestructura.orm import OutboxORM
+from orquestacion_trabajos.seedwork.infraestructura.despacho_outbox import DespachadorOutbox
+from orquestacion_trabajos.seedwork.infraestructura.orm import Base, OutboxORM
+from orquestacion_trabajos.seedwork.infraestructura.publicador_pulsar import PublicadorPulsar
 
 
-def _trabajo_creado_payload() -> dict[str, object]:
-    return {
-        "event_id": "evt-1",
-        "tipo": "TrabajoCreado.v1",
-        "version_contrato": 1,
-        "instante": "2026-09-13T00:00:00Z",
-        "correlacion": "sol-1",
-        "causacion": "evt-entrada",
-        "id_trabajo": "trab-1",
-        "id_solicitud": "sol-1",
-        "id_partner": "partner-1",
-        "id_peticion": "trab-1",
-        "referencia_externa": "ref-1",
-        "categoria": "SINIESTRO",
-        "tipo_solicitud": "SINIESTRO",
-        "tipo_red": "GENERAL_HDA",
-        "id_politica": "pol-1",
-        "version_politica": 1,
-        "creado_en": "2026-09-13T00:00:00Z",
-        "estado": "PENDIENTE_COTIZACION",
-        "version_trabajo": 1,
-    }
+@pytest.fixture
+def base():
+    engine = create_engine(os.environ["ORQUESTACION_DATABASE_URL"])
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    database = Database(engine, sessionmaker(bind=engine))
+    yield database
+    database.close()
 
 
-def _solicitar_cotizacion_payload() -> dict[str, object]:
-    return {
-        "command_id": "cmd-1",
-        "tipo": "SolicitarCotizacion.v1",
-        "version_contrato": 1,
-        "instante": "2026-09-13T00:00:00Z",
-        "correlacion": "sol-1",
-        "causacion": "evt-entrada",
-        "id_peticion": "trab-1",
-        "id_trabajo": "trab-1",
-        "id_solicitud": "sol-1",
-        "id_partner": "partner-1",
-        "categoria": "SINIESTRO",
-        "tipo_solicitud": "SINIESTRO",
-        "tipo_red": "GENERAL_HDA",
-        "id_politica": "pol-1",
-        "version_politica": 1,
-    }
+def add_output(base, destino="test", tipo="TrabajoCreado.v1"):
+    with base.session_factory() as session:
+        session.add(
+            OutboxORM(
+                tipo=tipo,
+                destino=destino,
+                payload={"event_id": "event", "id_trabajo": "work"},
+                creado_en="now",
+            )
+        )
+        session.commit()
 
 
-def _salida(tipo: str, payload: dict[str, object]) -> OutboxORM:
-    return OutboxORM(
-        id=1,
-        tipo=tipo,
-        destino="persistent://public/default/test",
-        payload=payload,
-        estado="PENDIENTE",
-        creado_en="2026-09-13T00:00:00Z",
-        procesado_en=None,
+@pytest.mark.parametrize("failure", ["send", "commit", None])
+def test_send_and_mark_are_atomic_and_retry_uses_same_payload(base, failure):
+    add_output(base)
+    publish = Mock()
+
+    class FailingSession(Session):
+        pass
+
+    sessions = sessionmaker(bind=base.engine, class_=FailingSession)
+
+    def fail_commit(session):
+        raise RuntimeError("commit failed")
+
+    if failure == "send":
+        publish.side_effect = RuntimeError("send failed")
+    if failure == "commit":
+        event.listen(FailingSession, "before_commit", fail_commit)
+    dispatcher = DespachadorOutbox(sessions, "test", publish)
+    if failure:
+        with pytest.raises(RuntimeError):
+            dispatcher.despachar_siguiente()
+        with base.session_factory() as session:
+            assert session.execute(select(OutboxORM.estado)).scalar_one() == "PENDIENTE"
+        publish.side_effect = None
+        if failure == "commit":
+            event.remove(FailingSession, "before_commit", fail_commit)
+    assert dispatcher.despachar_siguiente()
+    with base.session_factory() as session:
+        assert session.execute(select(OutboxORM.estado)).scalar_one() == "PROCESADA"
+    assert not dispatcher.despachar_siguiente()
+    assert all(call.args[1]["event_id"] == "event" for call in publish.call_args_list)
+
+
+def test_destinations_are_independent_and_unknown_pending_destination_is_visible(base):
+    add_output(base, "bad")
+    add_output(base, "good")
+    assert DespachadorOutbox(base.session_factory, "good", Mock()).despachar_siguiente()
+    with base.session_factory() as session:
+        assert (
+            session.execute(select(OutboxORM.estado).where(OutboxORM.destino == "bad")).scalar_one()
+            == "PENDIENTE"
+        )
+    with pytest.raises(ValueError, match="Unknown"):
+        verificar_destinos(base, Settings())
+
+
+@pytest.mark.parametrize(
+    "tipo,identifier", [("TrabajoCreado.v1", "event_id"), ("SolicitarCotizacion.v1", "command_id")]
+)
+def test_both_outputs_use_work_key_and_stable_identity(tipo, identifier):
+    publisher = Mock()
+    payload = {identifier: "stable", "id_trabajo": "work"}
+    publicacion(publisher)(tipo, payload)
+    publisher.publicar.assert_called_once_with(
+        payload, "work", {"tipo": tipo, identifier: "stable"}
     )
 
 
-def test_trabajo_creado_se_convierte_a_record_avro() -> None:
-    salida = _salida("TrabajoCreado.v1", _trabajo_creado_payload())
-
-    record = DespachoOutbox._record_para_salida(salida)
-
-    assert isinstance(record, TrabajoCreadoV1)
-    assert record.id_trabajo == "trab-1"
-    assert record.estado == "PENDIENTE_COTIZACION"
-
-
-def test_solicitar_cotizacion_se_convierte_a_record_avro() -> None:
-    salida = _salida("SolicitarCotizacion.v1", _solicitar_cotizacion_payload())
-
-    record = DespachoOutbox._record_para_salida(salida)
-
-    assert isinstance(record, SolicitarCotizacionV1)
-    assert record.id_trabajo == "trab-1"
-    assert record.command_id == "cmd-1"
+def test_publisher_opens_once_and_closes_client(monkeypatch):
+    client = Mock()
+    factory = Mock(return_value=client)
+    monkeypatch.setattr("pulsar.Client", factory)
+    publisher = PublicadorPulsar(
+        "pulsar://localhost:6650",
+        "persistent://public/default/test",
+        Mock(),
+        lambda payload: payload,
+    )
+    publisher.publicar({}, "key", {})
+    publisher.publicar({}, "key", {})
+    factory.assert_called_once()
+    client.create_producer.assert_called_once()
+    publisher.cerrar()
+    client.close.assert_called_once()
 
 
-def test_producers_se_crean_una_vez_con_schema_y_destino_correctos(monkeypatch) -> None:
+def test_bootstrap_selects_avro_and_configured_destination(base, monkeypatch):
     client = Mock()
     monkeypatch.setattr("pulsar.Client", Mock(return_value=client))
-    dispatcher = DespachoOutbox(Mock())
-
-    dispatcher.conectar()
-    dispatcher.conectar()
-
-    assert client.create_producer.call_count == 2
-    calls = client.create_producer.call_args_list
-    assert calls[0].args[0] == rutas.topico_solicitar_cotizacion
-    assert isinstance(calls[0].kwargs["schema"], AvroSchema)
-    assert calls[1].args[0] == rutas.topico_trabajo_creado
-    assert isinstance(calls[1].kwargs["schema"], AvroSchema)
-
-
-def test_publicar_salida_envia_record_y_marca_procesada_despues() -> None:
-    producer = Mock()
-    producer.send.return_value = "message-id"
-    session = Mock()
-    dispatcher = DespachoOutbox(Mock())
-    dispatcher.producers["TrabajoCreado.v1"] = producer
-    salida = _salida("TrabajoCreado.v1", _trabajo_creado_payload())
-
-    dispatcher._publicar_salida(session, salida)
-
-    enviado = producer.send.call_args.args[0]
-    assert isinstance(enviado, TrabajoCreadoV1)
-    assert salida.estado == "PROCESADA"
-    assert salida.procesado_en is not None
-    session.commit.assert_called_once()
-    session.rollback.assert_not_called()
-
-
-def test_fallo_de_publicacion_hace_rollback_y_deja_pendiente() -> None:
-    producer = Mock()
-    producer.send.side_effect = RuntimeError("broker no disponible")
-    session = Mock()
-    dispatcher = DespachoOutbox(Mock())
-    dispatcher.producers["TrabajoCreado.v1"] = producer
-    salida = _salida("TrabajoCreado.v1", _trabajo_creado_payload())
-
-    try:
-        dispatcher._publicar_salida(session, salida)
-    except RuntimeError:
-        pass
-
-    assert salida.estado == "PENDIENTE"
-    session.rollback.assert_called_once()
-    session.commit.assert_not_called()
-
-
-def test_tipo_desconocido_no_se_marca_procesado() -> None:
-    session = Mock()
-    dispatcher = DespachoOutbox(Mock())
-    salida = _salida("TipoDesconocido.v1", {"dato": "valor"})
-
-    dispatcher._publicar_salida(session, salida)
-
-    assert salida.estado == "PENDIENTE"
-    session.commit.assert_not_called()
-    session.rollback.assert_not_called()
-
-
-def test_fallo_despues_de_send_hace_rollback_y_conserva_la_fila_pendiente() -> None:
-    producer = Mock()
-    producer.send.return_value = "message-id"
-    session = Mock()
-    session.commit.side_effect = RuntimeError("fallo al confirmar PROCESADA")
-    dispatcher = DespachoOutbox(Mock())
-    dispatcher.producers["TrabajoCreado.v1"] = producer
-    salida = _salida("TrabajoCreado.v1", _trabajo_creado_payload())
-
-    try:
-        dispatcher._publicar_salida(session, salida)
-    except RuntimeError:
-        pass
-
-    producer.send.assert_called_once()
-    session.rollback.assert_called_once()
-
-
-def test_salidas_se_procesan_independientemente() -> None:
-    trabajo_producer = Mock()
-    trabajo_producer.send.side_effect = RuntimeError("fallo TrabajoCreado")
-    cotizacion_producer = Mock()
-    cotizacion_producer.send.return_value = "message-id"
-    dispatcher = DespachoOutbox(Mock())
-    dispatcher.producers = {
-        "TrabajoCreado.v1": trabajo_producer,
-        "SolicitarCotizacion.v1": cotizacion_producer,
-    }
-    first = _salida("TrabajoCreado.v1", _trabajo_creado_payload())
-    second = _salida("SolicitarCotizacion.v1", _solicitar_cotizacion_payload())
-    session = Mock()
-
-    for salida in (first, second):
-        try:
-            dispatcher._publicar_salida(session, salida)
-        except RuntimeError:
-            pass
-
-    assert first.estado == "PENDIENTE"
-    assert second.estado == "PROCESADA"
-    cotizacion_producer.send.assert_called_once()
-
-
-def test_both_publications_use_the_work_partition_key() -> None:
-    for message_type, payload in (
-        ("TrabajoCreado.v1", _trabajo_creado_payload()),
-        ("SolicitarCotizacion.v1", _solicitar_cotizacion_payload()),
-    ):
-        producer = Mock()
-        dispatcher = DespachoOutbox(Mock())
-        dispatcher.producers[message_type] = producer
-        dispatcher._publicar_salida(Mock(), _salida(message_type, payload))
-        assert producer.send.call_args.kwargs["partition_key"] == payload["id_trabajo"]
+    component = componer_despacho(
+        base, Settings(pulsar_namespace="isolated"), "TrabajoCreado.v1", TrabajoCreadoV1
+    )
+    assert not component.paso()
+    assert (
+        client.create_producer.call_args.args[0] == "persistent://public/isolated/trabajo-creado-v1"
+    )
+    component.cerrar()

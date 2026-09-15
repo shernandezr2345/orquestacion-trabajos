@@ -4,11 +4,11 @@ from pathlib import Path
 import pytest
 from pulsar.schema import AvroSchema
 
-from orquestacion_trabajos.infraestructura.esquemas_python.v1.cotizaciones import (
+from orquestacion_trabajos.modulos.trabajos.infraestructura.esquemas.v1.cotizaciones import (
     CotizacionRechazadaV1,
     CotizacionRegistradaV1,
 )
-from orquestacion_trabajos.infraestructura.esquemas_python.v1.entrada import (
+from orquestacion_trabajos.modulos.trabajos.infraestructura.esquemas.v1.entrada import (
     SolicitudDePartnerListaParaAtencionV1,
 )
 
@@ -34,21 +34,25 @@ def test_rejection_decodes_without_provider_or_category():
     assert decoded.motivo == document["motivo"]
 
 
-def test_topics_use_configured_namespace(monkeypatch):
-    from dataclasses import replace
+@pytest.mark.parametrize(
+    "tenant,namespace", [("public", "default"), ("custom", "contracts-isolated")]
+)
+def test_routes_preserve_topics_and_subscriptions(tenant, namespace):
+    from orquestacion_trabajos.config.rutas import destinos, fuentes
+    from orquestacion_trabajos.config.settings import Settings
 
-    import config.rutas as route_module
-
-    monkeypatch.setattr(
-        route_module,
-        "settings",
-        replace(route_module.settings, pulsar_namespace="contracts-isolated"),
-    )
-    routes = route_module.RutasPulsar()
-    assert (
-        routes.topico_solicitud_entrada
-        == "persistent://public/contracts-isolated/solicitud-partner-lista-v1"
-    )
-    assert (
-        routes.topico_trabajo_creado == "persistent://public/contracts-isolated/trabajo-creado-v1"
-    )
+    settings = Settings(pulsar_tenant=tenant, pulsar_namespace=namespace)
+    prefix = f"persistent://{tenant}/{namespace}"
+    assert [(source.nombre, source.topico, source.suscripcion) for source in fuentes(settings)] == [
+        ("entrada", f"{prefix}/solicitud-partner-lista-v1", "orquestacion-solicitudes-v1"),
+        (
+            "registrada",
+            f"{prefix}/cotizacion-registrada-v1",
+            "orquestacion-cotizacion-registrada-v1",
+        ),
+        ("rechazada", f"{prefix}/cotizacion-rechazada-v1", "orquestacion-cotizacion-rechazada-v1"),
+    ]
+    assert destinos(settings) == {
+        "TrabajoCreado.v1": f"{prefix}/trabajo-creado-v1",
+        "SolicitarCotizacion.v1": f"{prefix}/solicitar-cotizacion-v1",
+    }

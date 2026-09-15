@@ -8,6 +8,7 @@ dependencies = [
   "fastapi>=0.115.0,<1.0.0",
   "uvicorn[standard]>=0.30.0,<1.0.0",
   "sqlalchemy>=2.0.35,<3.0.0",
+  "alembic>=1.16,<2",
   "psycopg[binary]>=3.2.1,<4.0.0",
   "pulsar-client[avro]==3.13.0",
 ]
@@ -20,17 +21,24 @@ dev = [
   "mypy>=1.11.2,<2.0.0",
 ]
 
+[build-system]
+requires = ["uv_build==0.10.9"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+source-include = ["alembic.ini", "migraciones/**", "uv.lock"]
+
 [tool.pytest.ini_options]
-pythonpath = [".", "src"]
+addopts = "--import-mode=importlib"
 testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
-src = ["src", "config", "tests"]
+src = ["src", "tests"]
 
 [tool.mypy]
 python_version = "3.12"
-files = ["src", "config", "tests"]
+files = ["src", "tests"]
 warn_unused_configs = true
 
 [[tool.mypy.overrides]]

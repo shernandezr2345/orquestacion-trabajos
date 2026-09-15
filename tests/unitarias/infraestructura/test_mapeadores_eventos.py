@@ -4,15 +4,15 @@ import json
 
 import pytest
 
-from orquestacion_trabajos.infraestructura.mapeadores_eventos import (
-    MapeadorEventoEntrada,
-    MapeadorResultadoCotizacion,
-    MapeadorTrabajoAvro,
-)
 from orquestacion_trabajos.modulos.trabajos.dominio.entidades import Trabajo
 from orquestacion_trabajos.modulos.trabajos.dominio.objetos_valor import (
     CondicionesAtencion,
     OrigenSolicitud,
+)
+from orquestacion_trabajos.modulos.trabajos.infraestructura.mapeadores_eventos import (
+    MapeadorEventoEntrada,
+    MapeadorResultadoCotizacion,
+    MapeadorTrabajoAvro,
 )
 
 

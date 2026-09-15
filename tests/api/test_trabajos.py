@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from config.settings import settings
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import sessionmaker
 
 from orquestacion_trabajos.api.app import create_app
+from orquestacion_trabajos.config.settings import Settings
+
+settings = Settings.from_environment()
 from orquestacion_trabajos.modulos.trabajos.dominio.entidades import Trabajo, TrabajoEstado
 from orquestacion_trabajos.modulos.trabajos.dominio.objetos_valor import (
     CondicionesAtencion,

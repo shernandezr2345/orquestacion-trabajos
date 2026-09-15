@@ -9,7 +9,7 @@ def main() -> int:
     parser.add_argument("--check", action="store_true")
     arguments = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
-    infrastructure = root / "src/orquestacion_trabajos/infraestructura"
+    infrastructure = root / "src/orquestacion_trabajos/modulos/trabajos/infraestructura"
     contracts = [
         ("entrada", "SolicitudListaV1", "solicitud_de_partner_lista_v1", "solicitud-lista"),
         ("orquestacion", "TrabajoCreadoV1", "trabajo_creado_v1", "trabajo-creado"),
@@ -34,7 +34,7 @@ def main() -> int:
     ]
     different = []
     for module_name, class_name, internal_name, public_name in contracts:
-        path = infrastructure / "esquemas_python/v1" / f"{module_name}.py"
+        path = infrastructure / "esquemas/v1" / f"{module_name}.py"
         spec = importlib.util.spec_from_file_location(module_name, path)
         if spec is None or spec.loader is None:
             raise RuntimeError(f"Cannot load {path}")
@@ -42,7 +42,7 @@ def main() -> int:
         spec.loader.exec_module(module)
         schema = getattr(module, class_name).schema()
         for destination in (
-            infrastructure / "esquemas" / f"{internal_name}.avsc",
+            infrastructure / "contratos" / f"{internal_name}.avsc",
             root / "docs/contratos" / f"{public_name}-v1.avsc",
         ):
             if arguments.check:

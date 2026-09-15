@@ -52,6 +52,7 @@ class ResultadoCotizacion(ObjetoValor):
     def es_compatible_con(self, trabajo: Trabajo) -> bool:
         return (
             self.id_trabajo == str(trabajo.id)
+            and self.id_peticion == str(trabajo.id)
             and self.id_solicitud == str(trabajo.id_solicitud)
             and self.id_partner == str(trabajo.id_partner)
             and (

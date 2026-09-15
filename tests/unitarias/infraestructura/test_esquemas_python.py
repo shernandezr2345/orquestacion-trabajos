@@ -7,10 +7,10 @@ from typing import cast
 import pytest
 from pulsar.schema import AvroSchema, Record
 
-from orquestacion_trabajos.infraestructura.esquemas_python.v1.entrada import (
+from orquestacion_trabajos.modulos.trabajos.infraestructura.esquemas.v1.entrada import (
     SolicitudDePartnerListaParaAtencionV1,
 )
-from orquestacion_trabajos.infraestructura.esquemas_python.v1.orquestacion import (
+from orquestacion_trabajos.modulos.trabajos.infraestructura.esquemas.v1.orquestacion import (
     SolicitarCotizacionV1,
     TrabajoCreadoV1,
 )
@@ -19,7 +19,16 @@ ROOT = Path(__file__).parents[3]
 
 
 def _schema_path(name: str) -> Path:
-    return ROOT / "src" / "orquestacion_trabajos" / "infraestructura" / "esquemas" / name
+    return (
+        ROOT
+        / "src"
+        / "orquestacion_trabajos"
+        / "modulos"
+        / "trabajos"
+        / "infraestructura"
+        / "contratos"
+        / name
+    )
 
 
 def _normalizar_schema(schema: dict[str, object]) -> dict[str, object]:

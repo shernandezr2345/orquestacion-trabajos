@@ -3,10 +3,12 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from config.settings import settings
 from sqlalchemy import Engine, create_engine, select
 from sqlalchemy.orm import sessionmaker
 
+from orquestacion_trabajos.config.settings import Settings
+
+settings = Settings.from_environment()
 from orquestacion_trabajos.modulos.trabajos.aplicacion.comandos import (
     CrearTrabajoCommand,
     SolicitudListaParaAtencion,
@@ -14,31 +16,25 @@ from orquestacion_trabajos.modulos.trabajos.aplicacion.comandos import (
 from orquestacion_trabajos.modulos.trabajos.aplicacion.handlers.crear_trabajo import (
     CrearTrabajoHandler,
 )
-from orquestacion_trabajos.modulos.trabajos.aplicacion.idempotencia import InMemoryIdempotencia
-from orquestacion_trabajos.modulos.trabajos.aplicacion.unidad_trabajo import InMemoryUnidadTrabajo
 from orquestacion_trabajos.modulos.trabajos.dominio.entidades import Trabajo
 from orquestacion_trabajos.modulos.trabajos.dominio.objetos_valor import (
     CondicionesAtencion,
     OrigenSolicitud,
 )
-from orquestacion_trabajos.modulos.trabajos.infraestructura.orm import (
-    Base,
-    InboxORM,
-    OutboxORM,
-    TrabajoORM,
-)
+from orquestacion_trabajos.modulos.trabajos.infraestructura.orm import Base, TrabajoORM
 from orquestacion_trabajos.modulos.trabajos.infraestructura.repositorios import (
-    InboxConflictError,
-    SqlAlchemyInbox,
-    SqlAlchemyOutbox,
     SqlAlchemyRepositorioTrabajos,
 )
 from orquestacion_trabajos.modulos.trabajos.infraestructura.unidad_trabajo import (
-    SQLAlchemyUnidadTrabajo,
+    UnidadTrabajoTrabajosSQL,
 )
+from orquestacion_trabajos.seedwork.infraestructura.inbox import InboxConflictError, SqlAlchemyInbox
+from orquestacion_trabajos.seedwork.infraestructura.orm import InboxORM, OutboxORM
+from orquestacion_trabajos.seedwork.infraestructura.outbox import SqlAlchemyOutbox
 
 
 def _engine_postgresql() -> Engine:
+    assert settings.database_url is not None
     engine = create_engine(settings.database_url, future=True, pool_pre_ping=True)
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
@@ -120,11 +116,11 @@ def test_uow_commit_atomico_persiste_trabajo_inbox_y_outbox() -> None:
     consumer = f"consumer-{uuid.uuid4()}"
     id_solicitud = f"sol-{uuid.uuid4()}"
 
-    with Session() as session:
-        repo = SqlAlchemyRepositorioTrabajos(session)
+    with UnidadTrabajoTrabajosSQL(Session, {}) as uow:
+        session = uow.sesion
+        repo = uow.trabajos
         inbox = SqlAlchemyInbox(session)
         outbox = SqlAlchemyOutbox(session)
-        uow = SQLAlchemyUnidadTrabajo(session)
 
         trabajo = _trabajo_para_prueba(id_solicitud)
         repo.guardar(trabajo)
@@ -168,11 +164,11 @@ def test_uow_rollback_atomico_deshace_trabajo_inbox_y_outbox() -> None:
     consumer = f"consumer-{uuid.uuid4()}"
     id_solicitud = f"sol-{uuid.uuid4()}"
 
-    with Session() as session:
-        repo = SqlAlchemyRepositorioTrabajos(session)
+    with UnidadTrabajoTrabajosSQL(Session, {}) as uow:
+        session = uow.sesion
+        repo = uow.trabajos
         inbox = SqlAlchemyInbox(session)
         outbox = SqlAlchemyOutbox(session)
-        uow = SQLAlchemyUnidadTrabajo(session)
 
         trabajo = _trabajo_para_prueba(id_solicitud)
         repo.guardar(trabajo)
@@ -212,7 +208,7 @@ def test_inbox_real_mismo_id_y_contenido_no_crea_dos_registros() -> None:
     with Session() as session:
         inbox = SqlAlchemyInbox(session)
         inbox.registrar(consumidor=consumer, id_mensaje=message_id, contenido=contenido)
-        SQLAlchemyUnidadTrabajo(session).confirmar()
+        session.commit()
 
     with Session() as session:
         inbox = SqlAlchemyInbox(session)
@@ -243,7 +239,7 @@ def test_inbox_real_mismo_id_y_contenido_distinto_genera_conflicto() -> None:
     with Session() as session:
         inbox = SqlAlchemyInbox(session)
         inbox.registrar(consumidor=consumer, id_mensaje=message_id, contenido=contenido_original)
-        SQLAlchemyUnidadTrabajo(session).confirmar()
+        session.commit()
 
     with Session() as session:
         inbox = SqlAlchemyInbox(session)
@@ -270,12 +266,12 @@ def test_inbox_real_distinto_consumidor_mismo_mensaje_puede_registrarse() -> Non
     with Session() as session:
         inbox = SqlAlchemyInbox(session)
         inbox.registrar(consumidor="consumer-a", id_mensaje=message_id, contenido=contenido)
-        SQLAlchemyUnidadTrabajo(session).confirmar()
+        session.commit()
 
     with Session() as session:
         inbox = SqlAlchemyInbox(session)
         inbox.registrar(consumidor="consumer-b", id_mensaje=message_id, contenido=contenido)
-        SQLAlchemyUnidadTrabajo(session).confirmar()
+        session.commit()
 
     with Session() as session:
         rows = (
@@ -325,7 +321,7 @@ def test_outbox_real_persiste_salida_pendiente() -> None:
     with Session() as session:
         outbox = SqlAlchemyOutbox(session)
         outbox.registrar(tipo="TrabajoCreado.v1", payload=payload, destino="trabajos")
-        SQLAlchemyUnidadTrabajo(session).confirmar()
+        session.commit()
 
     with Session() as session:
         row = session.execute(
@@ -338,70 +334,25 @@ def test_outbox_real_persiste_salida_pendiente() -> None:
     assert row.estado == "PENDIENTE"
 
 
-def test_crear_trabajo_registra_dos_salidas_outbox_antes_del_commit() -> None:
+def test_handler_confirms_work_inbox_and_both_outputs():
     engine = _engine_postgresql()
-    Session = sessionmaker(bind=engine, expire_on_commit=False)
-    solicitud = _solicitud()
-
-    with Session() as session:
-        repo = SqlAlchemyRepositorioTrabajos(session)
-        outbox = SqlAlchemyOutbox(session)
-        handler = CrearTrabajoHandler(
-            repositorio=repo,
-            unidad_trabajo=InMemoryUnidadTrabajo(),
-            registro_salidas=outbox,
-            idempotencia=InMemoryIdempotencia(),
-        )
-
-        trabajo = handler.ejecutar(CrearTrabajoCommand(solicitud=solicitud))
-
-        pendientes_en_la_sesion = (
-            session.execute(select(OutboxORM).where(OutboxORM.estado == "PENDIENTE"))
-            .scalars()
-            .all()
-        )
-        assert {salida.tipo for salida in pendientes_en_la_sesion} == {
-            "TrabajoCreado.v1",
-            "SolicitarCotizacion.v1",
-        }
-
-        with Session() as otra_sesion:
-            antes_del_commit = (
-                otra_sesion.execute(
-                    select(OutboxORM).where(
-                        OutboxORM.payload["id_trabajo"].as_string() == str(trabajo.id)
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            assert antes_del_commit == []
-
-        session.commit()
-
-    with Session() as session:
-        despues_del_commit = (
-            session.execute(
-                select(OutboxORM).where(
-                    OutboxORM.payload["id_trabajo"].as_string() == str(trabajo.id)
-                )
-            )
-            .scalars()
-            .all()
-        )
-
-    assert {salida.tipo for salida in despues_del_commit} == {
-        "TrabajoCreado.v1",
-        "SolicitarCotizacion.v1",
-    }
+    sessions = sessionmaker(bind=engine, expire_on_commit=False)
+    destinos = {"TrabajoCreado.v1": "creado", "SolicitarCotizacion.v1": "peticion"}
+    handler = CrearTrabajoHandler(lambda: UnidadTrabajoTrabajosSQL(sessions, destinos))
+    comando = CrearTrabajoCommand(_solicitud())
+    trabajo = handler.ejecutar(comando)
+    handler.ejecutar(comando)
+    with sessions() as session:
+        assert session.get(TrabajoORM, str(trabajo.id)) is not None
+        assert len(session.execute(select(InboxORM)).scalars().all()) == 1
+        assert {row.tipo for row in session.execute(select(OutboxORM)).scalars()} == set(destinos)
 
 
 def test_unidad_trabajo_confirma_y_revertir() -> None:
     engine = _engine_postgresql()
     Session = sessionmaker(bind=engine, expire_on_commit=False)
 
-    with Session() as session:
-        uow = SQLAlchemyUnidadTrabajo(session)
+    with UnidadTrabajoTrabajosSQL(Session, {}) as uow:
         uow.confirmar()
         uow.revertir()
 
@@ -413,9 +364,8 @@ def test_uow_commit_persiste_en_sesion_nueva() -> None:
     Session = sessionmaker(bind=engine, expire_on_commit=False)
     id_solicitud = f"sol-{uuid.uuid4()}"
 
-    with Session() as session:
-        repo = SqlAlchemyRepositorioTrabajos(session)
-        uow = SQLAlchemyUnidadTrabajo(session)
+    with UnidadTrabajoTrabajosSQL(Session, {}) as uow:
+        repo = uow.trabajos
         trabajo = _trabajo_para_prueba(id_solicitud)
         repo.guardar(trabajo)
         uow.confirmar()
@@ -432,9 +382,8 @@ def test_uow_rollback_deshace_cambios() -> None:
     Session = sessionmaker(bind=engine, expire_on_commit=False)
     id_solicitud = f"sol-{uuid.uuid4()}"
 
-    with Session() as session:
-        repo = SqlAlchemyRepositorioTrabajos(session)
-        uow = SQLAlchemyUnidadTrabajo(session)
+    with UnidadTrabajoTrabajosSQL(Session, {}) as uow:
+        repo = uow.trabajos
         trabajo = _trabajo_para_prueba(id_solicitud)
         repo.guardar(trabajo)
         try:
@@ -445,3 +394,108 @@ def test_uow_rollback_deshace_cambios() -> None:
     with Session() as session:
         row = session.get(TrabajoORM, str(trabajo.id))
         assert row is None
+
+
+def test_concurrent_result_updates_preserve_first_commit() -> None:
+    from dataclasses import replace
+
+    from orquestacion_trabajos.modulos.trabajos.dominio.objetos_valor import ResultadoCotizacion
+
+    engine = _engine_postgresql()
+    sessions = sessionmaker(bind=engine, expire_on_commit=False)
+    work = _trabajo_para_prueba("concurrent-request")
+    with sessions() as session:
+        SqlAlchemyRepositorioTrabajos(session).guardar(work)
+        session.commit()
+    with sessions() as first, sessions() as second:
+        first_repo = SqlAlchemyRepositorioTrabajos(first)
+        second_repo = SqlAlchemyRepositorioTrabajos(second)
+        first_work = first_repo.obtener_por_id(str(work.id))
+        second_work = second_repo.obtener_por_id(str(work.id))
+        assert first_work is not None and second_work is not None
+        original = ResultadoCotizacion(
+            id_trabajo=str(work.id),
+            id_solicitud=work.id_solicitud,
+            id_partner=work.id_partner,
+            id_peticion=str(work.id),
+            id_cotizacion="quote",
+            id_proveedor="provider",
+            estado="ACEPTADA",
+            categoria=work.categoria,
+            tipo_red=work.tipo_red,
+            importe_menor=100,
+            moneda="COP",
+        )
+        first_work.aplicar_resultado(original)
+        second_work.aplicar_resultado(replace(original, importe_menor=200))
+        first_repo.guardar(first_work)
+        first.commit()
+        with pytest.raises(RuntimeError, match="[Cc]oncurr"):
+            second_repo.guardar(second_work)
+            second.commit()
+        second.rollback()
+    with sessions() as session:
+        saved = SqlAlchemyRepositorioTrabajos(session).obtener_por_id(str(work.id))
+        assert saved is not None and saved.resultado == original
+    engine.dispose()
+
+
+@pytest.mark.parametrize("accepted", [True, False])
+def test_result_transaction_is_durable_and_replay_preserves_version(accepted):
+    from dataclasses import replace
+
+    from orquestacion_trabajos.modulos.trabajos.aplicacion.comandos import (
+        AplicarCotizacionCommand,
+        ResultadoCotizacionEntrada,
+    )
+    from orquestacion_trabajos.modulos.trabajos.aplicacion.handlers.aplicar_cotizacion import (
+        AplicarCotizacionHandler,
+    )
+
+    engine = _engine_postgresql()
+    sessions = sessionmaker(bind=engine, expire_on_commit=False)
+    destinations = {"TrabajoCreado.v1": "creado", "SolicitarCotizacion.v1": "peticion"}
+    factory = lambda: UnidadTrabajoTrabajosSQL(sessions, destinations)
+    work = CrearTrabajoHandler(factory).ejecutar(CrearTrabajoCommand(_solicitud()))
+    result = ResultadoCotizacionEntrada(
+        event_id="result",
+        id_trabajo=str(work.id),
+        id_solicitud=work.id_solicitud,
+        id_partner=work.id_partner,
+        id_peticion=str(work.id),
+        id_cotizacion="quote" if accepted else "",
+        id_proveedor="provider" if accepted else "",
+        estado="ACEPTADA" if accepted else "RECHAZADA",
+        categoria=work.categoria,
+        tipo_red=work.tipo_red,
+        importe_menor=100 if accepted else None,
+        moneda="COP" if accepted else None,
+        motivo=None if accepted else "SIN_OFERTA_PARA_CATEGORIA",
+    )
+    handler = AplicarCotizacionHandler(factory)
+    handler.ejecutar(AplicarCotizacionCommand(result))
+    handler.ejecutar(AplicarCotizacionCommand(result))
+    with pytest.raises(InboxConflictError):
+        handler.ejecutar(AplicarCotizacionCommand(result, contenido="changed envelope"))
+    incompatible = replace(result, event_id="foreign", id_peticion="foreign")
+    from orquestacion_trabajos.modulos.trabajos.dominio.excepciones import CotizacionAjenaError
+
+    with pytest.raises(CotizacionAjenaError):
+        handler.ejecutar(AplicarCotizacionCommand(incompatible))
+    with sessions() as session:
+        assert session.get(TrabajoORM, str(work.id)).version == 2
+        assert len(session.execute(select(InboxORM)).scalars().all()) == 2
+        assert len(session.execute(select(OutboxORM)).scalars().all()) == 2
+
+
+def test_failed_output_registration_rolls_back_sql_work_and_inbox():
+    engine = _engine_postgresql()
+    sessions = sessionmaker(bind=engine, expire_on_commit=False)
+    handler = CrearTrabajoHandler(
+        lambda: UnidadTrabajoTrabajosSQL(sessions, {"TrabajoCreado.v1": "creado"})
+    )
+    with pytest.raises(KeyError):
+        handler.ejecutar(CrearTrabajoCommand(_solicitud()))
+    with sessions() as session:
+        for model in (TrabajoORM, InboxORM, OutboxORM):
+            assert session.execute(select(model)).scalars().all() == []

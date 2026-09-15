@@ -36,9 +36,13 @@ class ResultadoCotizacionEntrada:
 @dataclass(frozen=True)
 class CrearTrabajoCommand:
     solicitud: SolicitudListaParaAtencion
+    consumidor: str = "orquestacion-solicitudes-v1"
+    contenido: str | None = None
 
 
 @dataclass(frozen=True)
 class AplicarCotizacionCommand:
     resultado: ResultadoCotizacionEntrada
     version_esperada: int | None = None
+    consumidor: str = "orquestacion-resultados-v1"
+    contenido: str | None = None

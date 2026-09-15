@@ -13,12 +13,7 @@ class Settings:
     env: str = field(default_factory=lambda: _env("ORQUESTACION_ENV", "local"))
     http_host: str = field(default_factory=lambda: _env("ORQUESTACION_HTTP_HOST", "0.0.0.0"))
     http_port: int = field(default_factory=lambda: int(_env("ORQUESTACION_HTTP_PORT", "8001")))
-    database_url: str = field(
-        default_factory=lambda: _env(
-            "ORQUESTACION_DATABASE_URL",
-            "postgresql+psycopg://postgres:postgres@localhost:5432/orquestacion_trabajos",
-        )
-    )
+    database_url: str | None = field(default_factory=lambda: os.getenv("ORQUESTACION_DATABASE_URL"))
     pulsar_url: str = field(
         default_factory=lambda: _env("ORQUESTACION_PULSAR_URL", "pulsar://localhost:6650")
     )
@@ -33,5 +28,10 @@ class Settings:
         )
     )
 
+    @classmethod
+    def from_environment(cls) -> Settings:
+        return cls()
 
-settings = Settings()
+    def __post_init__(self) -> None:
+        if self.enable_lifespan_consumers and not self.database_url:
+            raise ValueError("Processing requires ORQUESTACION_DATABASE_URL")
