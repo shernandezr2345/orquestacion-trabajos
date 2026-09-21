@@ -10,6 +10,10 @@ from orquestacion_trabajos.config.database import Database
 from orquestacion_trabajos.config.persistencia import crear_uow
 from orquestacion_trabajos.config.rutas import destinos, fuentes
 from orquestacion_trabajos.config.settings import Settings
+from orquestacion_trabajos.modulos.sagas.aplicacion.coordinador import SagaCoordinator
+from orquestacion_trabajos.modulos.sagas.infraestructura.unidad_trabajo import (
+    UnidadTrabajoSagaTrabajosSQL,
+)
 from orquestacion_trabajos.modulos.trabajos.aplicacion.handlers.aplicar_cotizacion import (
     AplicarCotizacionHandler,
 )
@@ -58,6 +62,11 @@ def componer_consulta(sesion: Session) -> ConsultarTrabajosHandler:
 def componer_consumidores(base: Database, settings: Settings) -> list[Componente]:
     fabrica = crear_uow(base, settings)
     crear, aplicar = CrearTrabajoHandler(fabrica), AplicarCotizacionHandler(fabrica)
+    destinos_publicacion = destinos(settings)
+    crear_uow_coordinador = lambda: UnidadTrabajoSagaTrabajosSQL(
+        base.session_factory, destinos_publicacion
+    )
+    coordinator = SagaCoordinator(crear_uow_coordinador, crear, aplicar)
     componentes = []
     schemas = {
         "entrada": SolicitudDePartnerListaParaAtencionV1,
@@ -70,7 +79,7 @@ def componer_consumidores(base: Database, settings: Settings) -> list[Componente
             fuente.topico,
             fuente.suscripcion,
             AvroSchema(schemas[fuente.nombre]),
-            procesador(fuente.nombre, fuente.suscripcion, crear, aplicar),
+            procesador(fuente.nombre, fuente.suscripcion, crear, aplicar, coordinator),
             clasificar_error,
         )
         componentes.append(

@@ -2,6 +2,8 @@ import json
 from collections.abc import Callable
 from typing import Any
 
+from orquestacion_trabajos.modulos.sagas.aplicacion.coordinador import SagaCoordinator
+from orquestacion_trabajos.modulos.sagas.aplicacion.eventos import SagaMessageEnvelope
 from sqlalchemy.exc import InterfaceError, OperationalError
 from sqlalchemy.exc import TimeoutError as PoolTimeout
 
@@ -44,12 +46,35 @@ def clasificar_error(error: Exception) -> AccionError:
 
 
 def procesador(
-    tipo: str, suscripcion: str, crear: CrearTrabajoHandler, aplicar: AplicarCotizacionHandler
+    tipo: str,
+    suscripcion: str,
+    crear: CrearTrabajoHandler,
+    aplicar: AplicarCotizacionHandler,
+    coordinator: SagaCoordinator | None = None,
 ) -> Callable[[Any], None]:
     def procesar(mensaje: Any) -> None:
         record = mensaje.value()
         datos = {nombre: getattr(record, nombre) for nombre in record._fields}
         contenido = json.dumps(datos, sort_keys=True, default=str)
+
+        if coordinator is not None:
+            tipo_mensaje = str(datos.get("tipo", ""))
+            message_id = str(datos.get("event_id") or datos.get("command_id") or "")
+            coordinator.procesar(
+                SagaMessageEnvelope(
+                    tipo_mensaje=tipo_mensaje,
+                    message_id=message_id,
+                    payload=datos,
+                    id_saga=str(datos.get("id_saga", "")) or None,
+                    id_solicitud=str(datos.get("id_solicitud", "")) or None,
+                    id_trabajo=str(datos.get("id_trabajo", "")) or None,
+                    correlacion=str(datos.get("correlacion", "")) or None,
+                    causacion=str(datos.get("causacion", "")) or None,
+                ),
+                consumidor=suscripcion,
+            )
+            return
+
         if tipo == "entrada":
             solicitud = MapeadorEventoEntrada.mensaje_a_solicitud(datos)
             crear.ejecutar(CrearTrabajoCommand(solicitud, suscripcion, contenido))

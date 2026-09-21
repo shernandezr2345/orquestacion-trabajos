@@ -17,44 +17,51 @@ class CrearTrabajoHandler:
     def __init__(self, crear_unidad: Callable[[], UnidadTrabajoTrabajos]) -> None:
         self.crear_unidad = crear_unidad
 
-    def ejecutar(self, comando: CrearTrabajoCommand) -> Trabajo:
-        with self.crear_unidad() as unidad:
-            unidad.preparar_entrada(
-                comando.consumidor,
-                comando.solicitud.event_id,
-                comando.contenido or json.dumps(asdict(comando.solicitud), sort_keys=True),
-            )
-            solicitud = comando.solicitud
+    def ejecutar(
+        self, comando: CrearTrabajoCommand, *, unidad: UnidadTrabajoTrabajos | None = None
+    ) -> Trabajo:
+        if unidad is None:
+            with self.crear_unidad() as interna:
+                trabajo = self._ejecutar_en_unidad(comando, interna)
+                interna.confirmar()
+                return trabajo
+        return self._ejecutar_en_unidad(comando, unidad)
 
-            origen = OrigenSolicitud(
-                id_solicitud=solicitud.id_solicitud,
-                id_partner=solicitud.id_partner,
-                categoria=solicitud.categoria,
-                tipo_solicitud=solicitud.tipo_solicitud,
-                tipo_red=solicitud.tipo_red,
-                referencia_externa=solicitud.referencia_externa,
-                id_politica=solicitud.id_politica,
-                version_politica=solicitud.version_politica,
-            )
-            existing = unidad.trabajos.obtener_por_solicitud(solicitud.id_solicitud)
-            if existing is not None:
-                if existing.origen != origen:
-                    raise ValueError("La solicitud existente tiene condiciones diferentes")
+    def _ejecutar_en_unidad(self, comando: CrearTrabajoCommand, unidad: UnidadTrabajoTrabajos) -> Trabajo:
+        unidad.preparar_entrada(
+            comando.consumidor,
+            comando.solicitud.event_id,
+            comando.contenido or json.dumps(asdict(comando.solicitud), sort_keys=True),
+        )
+        solicitud = comando.solicitud
 
-                unidad.confirmar()
-                return existing
+        origen = OrigenSolicitud(
+            id_solicitud=solicitud.id_solicitud,
+            id_partner=solicitud.id_partner,
+            categoria=solicitud.categoria,
+            tipo_solicitud=solicitud.tipo_solicitud,
+            tipo_red=solicitud.tipo_red,
+            referencia_externa=solicitud.referencia_externa,
+            id_politica=solicitud.id_politica,
+            version_politica=solicitud.version_politica,
+        )
+        existing = unidad.trabajos.obtener_por_solicitud(solicitud.id_solicitud)
+        if existing is not None:
+            if existing.origen != origen:
+                raise ValueError("La solicitud existente tiene condiciones diferentes")
 
-            condiciones = CondicionesAtencion(
-                categoria=solicitud.categoria,
-                tipo_solicitud=solicitud.tipo_solicitud,
-                tipo_red=solicitud.tipo_red,
-            )
+            return existing
 
-            trabajo = Trabajo.crear(origen, condiciones)
+        condiciones = CondicionesAtencion(
+            categoria=solicitud.categoria,
+            tipo_solicitud=solicitud.tipo_solicitud,
+            tipo_red=solicitud.tipo_red,
+        )
 
-            unidad.trabajos.guardar(trabajo)
+        trabajo = Trabajo.crear(origen, condiciones)
 
-            unidad.registrar_creacion(trabajo, solicitud.event_id)
+        unidad.trabajos.guardar(trabajo)
 
-            unidad.confirmar()
-            return trabajo
+        unidad.registrar_creacion(trabajo, solicitud.event_id)
+
+        return trabajo
