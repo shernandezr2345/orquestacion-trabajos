@@ -4,6 +4,10 @@ from alembic import context
 from sqlalchemy import Connection, create_engine
 from sqlalchemy.pool import NullPool
 
+from orquestacion_trabajos.modulos.sagas.infraestructura.orm import (  # noqa: F401
+    SagaInstanceORM,
+    SagaLogORM,
+)
 from orquestacion_trabajos.modulos.trabajos.infraestructura.orm import Base
 
 

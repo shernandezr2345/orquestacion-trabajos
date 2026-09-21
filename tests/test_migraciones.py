@@ -11,6 +11,10 @@ from alembic.migration import MigrationContext
 from sqlalchemy import Engine, create_engine, insert, inspect, text
 from sqlalchemy.engine import make_url
 
+from orquestacion_trabajos.modulos.sagas.infraestructura.orm import (  # noqa: F401
+    SagaInstanceORM,
+    SagaLogORM,
+)
 from orquestacion_trabajos.modulos.trabajos.infraestructura.orm import Base
 from orquestacion_trabajos.seedwork.infraestructura.orm import InboxORM
 
@@ -49,9 +53,11 @@ def test_initial_migration_matches_orm_and_upgrade_preserves_data(migration_engi
         "trabajos",
         "inbox",
         "outbox",
+        "saga_instance",
+        "saga_log",
     }
     with migration_engine.begin() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0001"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0002"
         assert compare_metadata(MigrationContext.configure(connection), Base.metadata) == []
         connection.execute(
             insert(InboxORM).values(
