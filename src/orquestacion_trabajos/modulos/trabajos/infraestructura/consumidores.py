@@ -7,6 +7,9 @@ from sqlalchemy.exc import TimeoutError as PoolTimeout
 
 from orquestacion_trabajos.modulos.sagas.aplicacion.coordinador import SagaCoordinator
 from orquestacion_trabajos.modulos.sagas.aplicacion.eventos import SagaMessageEnvelope
+from orquestacion_trabajos.modulos.sagas.infraestructura.repositorios import (
+    SagaConcurrencyConflictError,
+)
 from orquestacion_trabajos.modulos.trabajos.aplicacion.comandos import (
     AplicarCotizacionCommand,
     CrearTrabajoCommand,
@@ -37,6 +40,7 @@ def clasificar_error(error: Exception) -> AccionError:
             InterfaceError,
             ColisionPersistencia,
             ConcurrencyConflictError,
+            SagaConcurrencyConflictError,
             ConnectionError,
             OSError,
         ),
@@ -54,7 +58,11 @@ def procesador(
 ) -> Callable[[Any], None]:
     def procesar(mensaje: Any) -> None:
         record = mensaje.value()
-        datos = {nombre: getattr(record, nombre) for nombre in record._fields}
+        datos = (
+            record
+            if isinstance(record, dict)
+            else {nombre: getattr(record, nombre) for nombre in record._fields}
+        )
         contenido = json.dumps(datos, sort_keys=True, default=str)
 
         if coordinator is not None:

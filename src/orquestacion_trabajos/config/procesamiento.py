@@ -34,7 +34,7 @@ class Procesamiento:
         listo = (
             not self.cerrando
             and database_ok
-            and len(fuentes) == 5
+            and len(fuentes) == 17
             and all(estado["estado"] == "operativo" for estado in fuentes.values())
         )
         return {

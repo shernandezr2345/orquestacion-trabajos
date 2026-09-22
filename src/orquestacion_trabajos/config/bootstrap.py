@@ -1,5 +1,8 @@
+import json
 from collections.abc import Callable
 from dataclasses import dataclass
+from importlib.resources import files
+from typing import Any
 
 import pulsar
 from pulsar.schema import AvroSchema
@@ -74,11 +77,16 @@ def componer_consumidores(base: Database, settings: Settings) -> list[Componente
         "rechazada": CotizacionRechazadaV1,
     }
     for fuente in fuentes(settings):
+        schema = (
+            AvroSchema(schemas[fuente.nombre])
+            if fuente.nombre in schemas
+            else saga_schema(fuente.topico.rsplit("/", 1)[-1])
+        )
         consumidor = ConsumidorPulsar(
             settings.pulsar_url,
             fuente.topico,
             fuente.suscripcion,
-            AvroSchema(schemas[fuente.nombre]),
+            schema,
             procesador(fuente.nombre, fuente.suscripcion, crear, aplicar, coordinator),
             clasificar_error,
         )
@@ -88,10 +96,15 @@ def componer_consumidores(base: Database, settings: Settings) -> list[Componente
     return componentes
 
 
-def componer_despacho(base: Database, settings: Settings, tipo: str, schema: type) -> Componente:
+def componer_despacho(
+    base: Database, settings: Settings, tipo: str, schema: type | None
+) -> Componente:
     destino = destinos(settings)[tipo]
     publicador = PublicadorPulsar(
-        settings.pulsar_url, destino, AvroSchema(schema), lambda payload: schema(**payload)
+        settings.pulsar_url,
+        destino,
+        AvroSchema(schema) if schema else saga_schema(destino.rsplit("/", 1)[-1]),
+        (lambda payload: schema(**payload)) if schema else (lambda payload: payload),
     )
     despacho = DespachadorOutbox(base.session_factory, destino, publicacion(publicador))
 
@@ -128,4 +141,16 @@ def componer_componentes(base: Database, settings: Settings) -> list[Componente]
         *componer_consumidores(base, settings),
         componer_despacho(base, settings, "TrabajoCreado.v1", TrabajoCreadoV1),
         componer_despacho(base, settings, "SolicitarCotizacion.v1", SolicitarCotizacionV1),
+        *(
+            componer_despacho(base, settings, tipo, None)
+            for tipo in destinos(settings)
+            if tipo not in {"TrabajoCreado.v1", "SolicitarCotizacion.v1"}
+        ),
     ]
+
+
+def saga_schema(topic: str) -> Any:
+    resource = files("orquestacion_trabajos.modulos.sagas.infraestructura").joinpath(
+        "contratos", topic + ".avsc"
+    )
+    return AvroSchema(None, schema_definition=json.loads(resource.read_text()))

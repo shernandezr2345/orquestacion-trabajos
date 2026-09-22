@@ -67,7 +67,7 @@ class UnidadTrabajoSagaTrabajosSQL(UnidadTrabajoSQL):
         self.destinos = destinos
 
     def _crear_repositorios(self) -> None:
-        self._sagas = SqlAlchemyRepositorioSagas(self.sesion)
+        self._sagas = SqlAlchemyRepositorioSagas(self.sesion, lock_reads=True)
         self._saga_logs = SqlAlchemyRepositorioSagaLog(self.sesion)
         self._trabajos = SqlAlchemyRepositorioTrabajos(self.sesion)
 
@@ -105,9 +105,21 @@ class UnidadTrabajoSagaTrabajosSQL(UnidadTrabajoSQL):
                 tipo=tipo, payload=mapper(trabajo, event_id), destino=self.destinos[tipo]
             )
 
+    def sincronizar(self) -> None:
+        self.sesion.flush()
+
+    def registrar_mensaje(self, tipo: str, payload: dict[str, object]) -> None:
+        SqlAlchemyOutbox(self.sesion).registrar(
+            tipo=tipo,
+            payload=payload,
+            destino=self.destinos[tipo],
+        )
+
     def outbox_por_tipo(self, *, tipo: str) -> list[dict[str, object]]:
         rows = (
-            self.sesion.execute(select(OutboxORM).where(OutboxORM.tipo == tipo).order_by(OutboxORM.id.asc()))
+            self.sesion.execute(
+                select(OutboxORM).where(OutboxORM.tipo == tipo).order_by(OutboxORM.id.asc())
+            )
             .scalars()
             .all()
         )

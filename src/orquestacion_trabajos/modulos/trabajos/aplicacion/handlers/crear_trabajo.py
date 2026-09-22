@@ -27,7 +27,9 @@ class CrearTrabajoHandler:
                 return trabajo
         return self._ejecutar_en_unidad(comando, unidad)
 
-    def _ejecutar_en_unidad(self, comando: CrearTrabajoCommand, unidad: UnidadTrabajoTrabajos) -> Trabajo:
+    def _ejecutar_en_unidad(
+        self, comando: CrearTrabajoCommand, unidad: UnidadTrabajoTrabajos
+    ) -> Trabajo:
         unidad.preparar_entrada(
             comando.consumidor,
             comando.solicitud.event_id,

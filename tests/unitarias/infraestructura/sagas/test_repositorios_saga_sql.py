@@ -484,9 +484,10 @@ def test_15_uow_rollback_atomico_revierte_saga_y_log() -> None:
         repo.crear(saga)
         session.commit()
 
-    with pytest.raises(RuntimeError, match="fallo intencional"), UnidadTrabajoSagasSQL(
-        SessionFactory
-    ) as uow:
+    with (
+        pytest.raises(RuntimeError, match="fallo intencional"),
+        UnidadTrabajoSagasSQL(SessionFactory) as uow,
+    ):
         saga_loaded = uow.sagas.obtener_por_id_solicitud("sol-015")
         assert saga_loaded is not None
         uow.sagas.actualizar_paso(saga_loaded, SagaStepName.SOLICITAR_COTIZACION)

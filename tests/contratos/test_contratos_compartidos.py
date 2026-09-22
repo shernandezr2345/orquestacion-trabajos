@@ -43,7 +43,9 @@ def test_routes_preserve_topics_and_subscriptions(tenant, namespace):
 
     settings = Settings(pulsar_tenant=tenant, pulsar_namespace=namespace)
     prefix = f"persistent://{tenant}/{namespace}"
-    assert [(source.nombre, source.topico, source.suscripcion) for source in fuentes(settings)] == [
+    assert [
+        (source.nombre, source.topico, source.suscripcion) for source in fuentes(settings)[:3]
+    ] == [
         ("entrada", f"{prefix}/solicitud-partner-lista-v1", "orquestacion-solicitudes-v1"),
         (
             "registrada",
@@ -52,7 +54,11 @@ def test_routes_preserve_topics_and_subscriptions(tenant, namespace):
         ),
         ("rechazada", f"{prefix}/cotizacion-rechazada-v1", "orquestacion-cotizacion-rechazada-v1"),
     ]
-    assert destinos(settings) == {
+    assert {
+        kind: topic
+        for kind, topic in destinos(settings).items()
+        if kind in {"TrabajoCreado.v1", "SolicitarCotizacion.v1"}
+    } == {
         "TrabajoCreado.v1": f"{prefix}/trabajo-creado-v1",
         "SolicitarCotizacion.v1": f"{prefix}/solicitar-cotizacion-v1",
     }

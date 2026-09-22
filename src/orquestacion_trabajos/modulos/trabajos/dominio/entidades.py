@@ -23,6 +23,7 @@ class TrabajoEstado(str, Enum):
     PENDIENTE_COTIZACION = "PENDIENTE_COTIZACION"
     COTIZADO = "COTIZADO"
     COTIZACION_RECHAZADA = "COTIZACION_RECHAZADA"
+    CANCELADO = "CANCELADO"
 
 
 class Trabajo(Entidad):
@@ -78,6 +79,11 @@ class Trabajo(Entidad):
         trabajo.agregar_evento(evento)
         return trabajo
 
+    def cancelar(self) -> None:
+        if self.estado != TrabajoEstado.CANCELADO:
+            self.estado = TrabajoEstado.CANCELADO
+            self.version += 1
+
     def aplicar_resultado(
         self,
         resultado: ResultadoCotizacion,
@@ -98,6 +104,9 @@ class Trabajo(Entidad):
             raise ResultadoIncompatibleError(
                 "Un resultado terminal no puede ser reemplazado por otro resultado"
             )
+
+        if self.estado == TrabajoEstado.CANCELADO:
+            raise EstadoTrabajoInvalidoError("Un trabajo cancelado no puede reactivarse")
 
         if resultado.es_aceptada():
             self.estado = TrabajoEstado.COTIZADO

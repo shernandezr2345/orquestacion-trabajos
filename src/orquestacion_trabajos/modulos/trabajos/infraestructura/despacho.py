@@ -5,10 +5,14 @@ from orquestacion_trabajos.seedwork.infraestructura.publicador_pulsar import Pub
 
 def publicacion(publicador: PublicadorPulsar) -> Callable[[str, dict[str, object]], None]:
     def publicar(tipo: str, payload: dict[str, object]) -> None:
-        identificador = "command_id" if tipo == "SolicitarCotizacion.v1" else "event_id"
+        identificador = "command_id" if "command_id" in payload else "event_id"
         publicador.publicar(
             payload,
-            str(payload["id_trabajo"]),
+            str(
+                payload["id_solicitud"]
+                if tipo.startswith("RegistrarAtencion")
+                else payload["id_trabajo"]
+            ),
             {"tipo": tipo, identificador: str(payload[identificador])},
         )
 

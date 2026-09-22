@@ -6,6 +6,7 @@ from typing import Any
 from uuid import uuid4
 
 from orquestacion_trabajos.modulos.sagas.aplicacion.eventos import SagaMessageEnvelope
+from orquestacion_trabajos.modulos.sagas.aplicacion.unidad_trabajo import UnidadTrabajoSaga
 from orquestacion_trabajos.modulos.sagas.dominio.entidades import (
     SagaInstance,
     SagaLog,
@@ -13,9 +14,6 @@ from orquestacion_trabajos.modulos.sagas.dominio.entidades import (
     SagaLogTipoRegistro,
     SagaStatus,
     SagaStepName,
-)
-from orquestacion_trabajos.modulos.sagas.infraestructura.unidad_trabajo import (
-    UnidadTrabajoSagaTrabajosSQL,
 )
 from orquestacion_trabajos.modulos.trabajos.aplicacion.comandos import (
     AplicarCotizacionCommand,
@@ -27,7 +25,7 @@ from orquestacion_trabajos.modulos.trabajos.aplicacion.handlers.aplicar_cotizaci
 from orquestacion_trabajos.modulos.trabajos.aplicacion.handlers.crear_trabajo import (
     CrearTrabajoHandler,
 )
-from orquestacion_trabajos.modulos.trabajos.infraestructura.mapeadores_eventos import (
+from orquestacion_trabajos.modulos.trabajos.aplicacion.mensajes import (
     MapeadorEventoEntrada,
     MapeadorResultadoCotizacion,
 )
@@ -39,17 +37,12 @@ class SagaConflictError(ValueError):
 
 DETALLE_CANCELACION_TRABAJO_LOCAL = "Trabajo cancelado localmente como compensacion"
 DETALLE_COMMAND_EMITTED_OUTBOX = "Comando persistido en outbox para publicacion"
-DETALLE_COMMAND_EMITTED_PENDIENTE_CONTRATO = (
-    "PENDIENTE DE CONTRATO EXTERNO: no publicado en outbox"
-)
 
 
 class SagaCoordinator:
-    """Coordina transiciones de Saga con una unica transaccion."""
-
     def __init__(
         self,
-        crear_unidad: Callable[[], UnidadTrabajoSagaTrabajosSQL],
+        crear_unidad: Callable[[], UnidadTrabajoSaga],
         crear_handler: CrearTrabajoHandler,
         aplicar_handler: AplicarCotizacionHandler,
     ) -> None:
@@ -115,20 +108,22 @@ class SagaCoordinator:
                         envelope=envelope,
                         tipo_comando=tipo_comando_causal,
                     )
-                self._registrar(
-                    unidad,
-                    saga=saga,
-                    envelope=envelope,
-                    tipo=SagaLogTipoRegistro.EVENT_RECEIVED,
-                    resultado=SagaLogResultado.APPLIED,
-                )
-                self._ejecutar_transicion(unidad, saga, envelope, consumidor=consumidor)
             except SagaConflictError as error:
                 self._registrar_conflicto(unidad, envelope, saga=saga, detalle=str(error))
+                unidad.confirmar()
+                return
+            self._registrar(
+                unidad,
+                saga=saga,
+                envelope=envelope,
+                tipo=SagaLogTipoRegistro.EVENT_RECEIVED,
+                resultado=SagaLogResultado.APPLIED,
+            )
+            self._ejecutar_transicion(unidad, saga, envelope, consumidor=consumidor)
             unidad.confirmar()
 
     def _resolver_saga(
-        self, unidad: UnidadTrabajoSagaTrabajosSQL, envelope: SagaMessageEnvelope
+        self, unidad: UnidadTrabajoSaga, envelope: SagaMessageEnvelope
     ) -> SagaInstance | None:
         if envelope.id_saga is None and envelope.id_solicitud is None:
             return None
@@ -148,10 +143,13 @@ class SagaCoordinator:
             return by_saga
 
         by_solicitud = unidad.sagas.obtener_por_id_solicitud(envelope.id_solicitud or "")
-        if by_solicitud is None and envelope.tipo_mensaje == "SolicitudDePartnerListaParaAtencion.v1":
+        if (
+            by_solicitud is None
+            and envelope.tipo_mensaje == "SolicitudDePartnerListaParaAtencion.v1"
+        ):
             saga = SagaInstance.crear(id_solicitud=envelope.id_solicitud or "")
             unidad.sagas.crear(saga)
-            unidad.sesion.flush()
+            unidad.sincronizar()
             return saga
         return by_solicitud
 
@@ -166,7 +164,7 @@ class SagaCoordinator:
         return envelope.message_id, None
 
     def _es_duplicado(
-        self, unidad: UnidadTrabajoSagaTrabajosSQL, saga: SagaInstance, envelope: SagaMessageEnvelope
+        self, unidad: UnidadTrabajoSaga, saga: SagaInstance, envelope: SagaMessageEnvelope
     ) -> bool:
         if not envelope.message_id:
             return False
@@ -193,7 +191,10 @@ class SagaCoordinator:
         if esperado is None:
             return False
         if envelope.tipo_mensaje == "SolicitudDePartnerListaParaAtencion.v1":
-            return saga.paso_actual in {SagaStepName.CREAR_TRABAJO, SagaStepName.SOLICITAR_COTIZACION}
+            return saga.paso_actual in {
+                SagaStepName.CREAR_TRABAJO,
+                SagaStepName.SOLICITAR_COTIZACION,
+            }
         if envelope.tipo_mensaje == "AtencionCanceladaRegistrada.v1":
             return saga.paso_actual in {
                 SagaStepName.REGISTRAR_ATENCION_CANCELADA,
@@ -218,7 +219,7 @@ class SagaCoordinator:
 
     def _ejecutar_transicion(
         self,
-        unidad: UnidadTrabajoSagaTrabajosSQL,
+        unidad: UnidadTrabajoSaga,
         saga: SagaInstance,
         envelope: SagaMessageEnvelope,
         *,
@@ -234,6 +235,8 @@ class SagaCoordinator:
                 ),
                 unidad=unidad,
             )
+            if saga.id_trabajo is not None:
+                return
             unidad.sagas.asignar_id_trabajo(saga, str(trabajo.id))
             unidad.sagas.actualizar_paso(saga, SagaStepName.SOLICITAR_COTIZACION)
             self._registrar(
@@ -244,8 +247,8 @@ class SagaCoordinator:
                 resultado=SagaLogResultado.APPLIED,
                 detalle="Trabajo creado/reusado y saga preparada para solicitar cotizacion",
             )
-            unidad.sesion.flush()
-            comando = self._ultimo_payload(unidad, "SolicitarCotizacion.v1")
+            unidad.sincronizar()
+            comando = self._ultimo_payload(unidad, "SolicitarCotizacion.v1", saga.id_solicitud)
             if comando is not None:
                 self._registrar(
                     unidad,
@@ -282,7 +285,7 @@ class SagaCoordinator:
             if envelope.tipo_mensaje == "CotizacionRegistrada.v1":
                 unidad.sagas.actualizar_paso(saga, SagaStepName.ABRIR_SEGUIMIENTO)
                 unidad.sagas.marcar_seguimiento_apertura_solicitada(saga)
-                self._emitir_comando_pendiente_contrato(
+                self._emitir_comando(
                     unidad,
                     saga=saga,
                     tipo_mensaje="AbrirSeguimientoTrabajo.v1",
@@ -304,7 +307,7 @@ class SagaCoordinator:
                     estado_nuevo=SagaStatus.COMPENSATING,
                 )
                 self._registrar_cancelacion_local_trabajo(unidad, saga=saga, envelope=envelope)
-                self._emitir_evento_pendiente_contrato(
+                self._emitir_evento(
                     unidad,
                     saga=saga,
                     tipo_mensaje="TrabajoCancelado.v1",
@@ -315,7 +318,7 @@ class SagaCoordinator:
                     },
                 )
                 unidad.sagas.actualizar_paso(saga, SagaStepName.REGISTRAR_ATENCION_CANCELADA)
-                self._emitir_comando_pendiente_contrato(
+                self._emitir_comando(
                     unidad,
                     saga=saga,
                     tipo_mensaje="RegistrarAtencionCancelada.v1",
@@ -327,7 +330,7 @@ class SagaCoordinator:
                 )
                 if saga.seguimiento_apertura_solicitada or saga.seguimiento_abierto_confirmado:
                     unidad.sagas.actualizar_paso(saga, SagaStepName.CANCELAR_SEGUIMIENTO_SI_APLICA)
-                    self._emitir_comando_pendiente_contrato(
+                    self._emitir_comando(
                         unidad,
                         saga=saga,
                         tipo_mensaje="CancelarSeguimientoTrabajo.v1",
@@ -350,7 +353,7 @@ class SagaCoordinator:
         if envelope.tipo_mensaje == "SeguimientoTrabajoAbierto.v1":
             unidad.sagas.marcar_seguimiento_abierto_confirmado(saga)
             unidad.sagas.actualizar_paso(saga, SagaStepName.REGISTRAR_ATENCION_HABILITADA)
-            self._emitir_comando_pendiente_contrato(
+            self._emitir_comando(
                 unidad,
                 saga=saga,
                 tipo_mensaje="RegistrarAtencionHabilitada.v1",
@@ -370,7 +373,7 @@ class SagaCoordinator:
                 estado_anterior=estado_anterior,
                 estado_nuevo=SagaStatus.COMPENSATING,
             )
-            self._emitir_comando_pendiente_contrato(
+            self._emitir_comando(
                 unidad,
                 saga=saga,
                 tipo_mensaje="AnularCotizacion.v1",
@@ -378,7 +381,8 @@ class SagaCoordinator:
                 extras={
                     "id_cotizacion": envelope.payload.get("id_cotizacion"),
                     "codigo_motivo": envelope.payload.get("codigo_motivo") or "APERTURA_FALLIDA",
-                    "detalle": envelope.payload.get("detalle") or "Compensacion por apertura fallida",
+                    "detalle": envelope.payload.get("detalle")
+                    or "Compensacion por apertura fallida",
                 },
             )
             return
@@ -386,7 +390,7 @@ class SagaCoordinator:
         if envelope.tipo_mensaje == "CotizacionAnulada.v1":
             unidad.sagas.actualizar_paso(saga, SagaStepName.CANCELAR_TRABAJO_COMPENSACION)
             self._registrar_cancelacion_local_trabajo(unidad, saga=saga, envelope=envelope)
-            self._emitir_evento_pendiente_contrato(
+            self._emitir_evento(
                 unidad,
                 saga=saga,
                 tipo_mensaje="TrabajoCancelado.v1",
@@ -396,8 +400,10 @@ class SagaCoordinator:
                     "detalle": "Cancelacion luego de cotizacion anulada",
                 },
             )
-            unidad.sagas.actualizar_paso(saga, SagaStepName.REGISTRAR_ATENCION_CANCELADA_COMPENSACION)
-            self._emitir_comando_pendiente_contrato(
+            unidad.sagas.actualizar_paso(
+                saga, SagaStepName.REGISTRAR_ATENCION_CANCELADA_COMPENSACION
+            )
+            self._emitir_comando(
                 unidad,
                 saga=saga,
                 tipo_mensaje="RegistrarAtencionCancelada.v1",
@@ -409,7 +415,7 @@ class SagaCoordinator:
             )
             if saga.seguimiento_apertura_solicitada or saga.seguimiento_abierto_confirmado:
                 unidad.sagas.actualizar_paso(saga, SagaStepName.CANCELAR_SEGUIMIENTO_SI_APLICA)
-                self._emitir_comando_pendiente_contrato(
+                self._emitir_comando(
                     unidad,
                     saga=saga,
                     tipo_mensaje="CancelarSeguimientoTrabajo.v1",
@@ -449,7 +455,7 @@ class SagaCoordinator:
 
     def _registrar_conflicto(
         self,
-        unidad: UnidadTrabajoSagaTrabajosSQL,
+        unidad: UnidadTrabajoSaga,
         envelope: SagaMessageEnvelope,
         *,
         saga: SagaInstance | None = None,
@@ -472,7 +478,7 @@ class SagaCoordinator:
 
     def _registrar_estado(
         self,
-        unidad: UnidadTrabajoSagaTrabajosSQL,
+        unidad: UnidadTrabajoSaga,
         *,
         saga: SagaInstance,
         envelope: SagaMessageEnvelope,
@@ -491,7 +497,7 @@ class SagaCoordinator:
 
     def _registrar(
         self,
-        unidad: UnidadTrabajoSagaTrabajosSQL,
+        unidad: UnidadTrabajoSaga,
         *,
         saga: SagaInstance,
         envelope: SagaMessageEnvelope,
@@ -531,7 +537,12 @@ class SagaCoordinator:
 
     @staticmethod
     def _ids_desde_envelope(envelope: SagaMessageEnvelope) -> tuple[str | None, str | None]:
-        if envelope.tipo_mensaje.endswith(".v1") and envelope.tipo_mensaje.startswith("Solicitar"):
+        if envelope.tipo_mensaje in {
+            "SolicitarCotizacion.v1",
+            "AbrirSeguimientoTrabajo.v1",
+            "CancelarSeguimientoTrabajo.v1",
+            "AnularCotizacion.v1",
+        }:
             return None, envelope.message_id
         if envelope.tipo_mensaje.endswith(".v1") and envelope.tipo_mensaje.startswith("Registrar"):
             return None, envelope.message_id
@@ -541,15 +552,19 @@ class SagaCoordinator:
 
     @staticmethod
     def _ultimo_payload(
-        unidad: UnidadTrabajoSagaTrabajosSQL, tipo: str
+        unidad: UnidadTrabajoSaga, tipo: str, id_solicitud: str
     ) -> dict[str, Any] | None:
-        payloads = unidad.outbox_por_tipo(tipo=tipo)
+        payloads = [
+            payload
+            for payload in unidad.outbox_por_tipo(tipo=tipo)
+            if payload.get("id_solicitud") == id_solicitud
+        ]
         if not payloads:
             return None
         return payloads[-1]
 
     @staticmethod
-    def _logs_saga(unidad: UnidadTrabajoSagaTrabajosSQL, id_saga: str) -> list[SagaLog]:
+    def _logs_saga(unidad: UnidadTrabajoSaga, id_saga: str) -> list[SagaLog]:
         return unidad.saga_logs.listar_por_saga(id_saga)
 
     @staticmethod
@@ -567,7 +582,7 @@ class SagaCoordinator:
 
     def _comando_emitido_por_id(
         self,
-        unidad: UnidadTrabajoSagaTrabajosSQL,
+        unidad: UnidadTrabajoSaga,
         *,
         saga: SagaInstance,
         command_id: str,
@@ -583,7 +598,7 @@ class SagaCoordinator:
 
     def _validar_causacion_con_comando_emitido(
         self,
-        unidad: UnidadTrabajoSagaTrabajosSQL,
+        unidad: UnidadTrabajoSaga,
         *,
         saga: SagaInstance,
         envelope: SagaMessageEnvelope,
@@ -609,16 +624,16 @@ class SagaCoordinator:
                 f"se esperaba {tipo_comando}"
             )
 
-    def _emitir_comando_pendiente_contrato(
+    def _emitir_comando(
         self,
-        unidad: UnidadTrabajoSagaTrabajosSQL,
+        unidad: UnidadTrabajoSaga,
         *,
         saga: SagaInstance,
         tipo_mensaje: str,
         causacion: str,
         extras: dict[str, object | None] | None = None,
     ) -> str:
-        command_id = f"cmd-{uuid4()}"
+        command_id = str(uuid4())
         payload: dict[str, object] = {
             "command_id": command_id,
             "tipo": tipo_mensaje,
@@ -631,10 +646,21 @@ class SagaCoordinator:
         }
         if saga.id_trabajo:
             payload["id_trabajo"] = saga.id_trabajo
+        trabajo = unidad.trabajos.obtener_por_id(saga.id_trabajo or "")
+        if trabajo is None:
+            raise SagaConflictError("Trabajo de saga no encontrado")
+        payload["id_partner"] = trabajo.id_partner
+
         if extras:
             for key, value in extras.items():
                 if value is not None:
                     payload[key] = value
+        if tipo_mensaje == "AnularCotizacion.v1":
+            if trabajo.resultado is None or trabajo.resultado.id_cotizacion is None:
+                raise SagaConflictError("Compensacion sin cotizacion persistida")
+            payload["id_cotizacion"] = trabajo.resultado.id_cotizacion
+            payload["id_peticion"] = trabajo.resultado.id_peticion
+        unidad.registrar_mensaje(tipo_mensaje, payload)
         self._registrar(
             unidad,
             saga=saga,
@@ -650,20 +676,20 @@ class SagaCoordinator:
             ),
             tipo=SagaLogTipoRegistro.COMMAND_EMITTED,
             resultado=SagaLogResultado.APPLIED,
-            detalle=DETALLE_COMMAND_EMITTED_PENDIENTE_CONTRATO,
+            detalle=DETALLE_COMMAND_EMITTED_OUTBOX,
         )
         return command_id
 
-    def _emitir_evento_pendiente_contrato(
+    def _emitir_evento(
         self,
-        unidad: UnidadTrabajoSagaTrabajosSQL,
+        unidad: UnidadTrabajoSaga,
         *,
         saga: SagaInstance,
         tipo_mensaje: str,
         causacion: str,
         extras: dict[str, object | None] | None = None,
     ) -> str:
-        event_id = f"evt-{uuid4()}"
+        event_id = str(uuid4())
         payload: dict[str, object] = {
             "event_id": event_id,
             "tipo": tipo_mensaje,
@@ -676,10 +702,18 @@ class SagaCoordinator:
         }
         if saga.id_trabajo:
             payload["id_trabajo"] = saga.id_trabajo
+        trabajo = unidad.trabajos.obtener_por_id(saga.id_trabajo or "")
+        if trabajo is None:
+            raise SagaConflictError("Trabajo de saga no encontrado")
+        payload["id_partner"] = trabajo.id_partner
+
         if extras:
             for key, value in extras.items():
                 if value is not None:
                     payload[key] = value
+        payload["cancelado_en"] = payload["instante"]
+        payload["version_trabajo"] = trabajo.version
+        unidad.registrar_mensaje(tipo_mensaje, payload)
         self._registrar(
             unidad,
             saga=saga,
@@ -695,7 +729,7 @@ class SagaCoordinator:
             ),
             tipo=SagaLogTipoRegistro.EVENT_EMITTED,
             resultado=SagaLogResultado.APPLIED,
-            detalle=DETALLE_COMMAND_EMITTED_PENDIENTE_CONTRATO,
+            detalle=DETALLE_COMMAND_EMITTED_OUTBOX,
         )
         return event_id
 
@@ -718,11 +752,16 @@ class SagaCoordinator:
 
     def _registrar_cancelacion_local_trabajo(
         self,
-        unidad: UnidadTrabajoSagaTrabajosSQL,
+        unidad: UnidadTrabajoSaga,
         *,
         saga: SagaInstance,
         envelope: SagaMessageEnvelope,
     ) -> None:
+        trabajo = unidad.trabajos.obtener_por_id(saga.id_trabajo or "")
+        if trabajo is None:
+            raise SagaConflictError("Trabajo de saga no encontrado")
+        trabajo.cancelar()
+        unidad.trabajos.guardar(trabajo)
         self._registrar(
             unidad,
             saga=saga,
@@ -732,10 +771,8 @@ class SagaCoordinator:
             detalle=DETALLE_CANCELACION_TRABAJO_LOCAL,
         )
 
-    def _compensaciones_confirmadas(
-        self, unidad: UnidadTrabajoSagaTrabajosSQL, *, saga: SagaInstance
-    ) -> bool:
-        unidad.sesion.flush()
+    def _compensaciones_confirmadas(self, unidad: UnidadTrabajoSaga, *, saga: SagaInstance) -> bool:
+        unidad.sincronizar()
         logs = self._logs_saga(unidad, saga.id_saga)
         trabajo_cancelado = any(
             log.tipo_registro == SagaLogTipoRegistro.LOCAL_OPERATION
@@ -756,13 +793,15 @@ class SagaCoordinator:
             and log.resultado == SagaLogResultado.APPLIED
             for log in logs
         )
-        return trabajo_cancelado and atencion_cancelada and (
-            not requiere_cancelar_seguimiento or seguimiento_cancelado
+        return (
+            trabajo_cancelado
+            and atencion_cancelada
+            and (not requiere_cancelar_seguimiento or seguimiento_cancelado)
         )
 
     def _cerrar_compensacion_si_corresponde(
         self,
-        unidad: UnidadTrabajoSagaTrabajosSQL,
+        unidad: UnidadTrabajoSaga,
         *,
         saga: SagaInstance,
         envelope: SagaMessageEnvelope,

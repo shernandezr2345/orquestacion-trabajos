@@ -28,8 +28,9 @@ class SagaConcurrencyConflictError(RuntimeError):
 
 
 class SqlAlchemyRepositorioSagas(RepositorioSagas):
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session, *, lock_reads: bool = False) -> None:
         self._session = session
+        self._lock_reads = lock_reads
         self._loaded_versions: dict[str, int] = {}
 
     def _sesion(self) -> Session:
@@ -43,16 +44,17 @@ class SqlAlchemyRepositorioSagas(RepositorioSagas):
             raise ValueError("Conflicto de unicidad al crear saga") from exc
 
     def obtener_por_id_saga(self, id_saga: str) -> SagaInstance | None:
-        row = self._sesion().get(SagaInstanceORM, id_saga)
+        row = self._sesion().get(SagaInstanceORM, id_saga, with_for_update=self._lock_reads)
         if row is None:
             return None
         self._loaded_versions[id_saga] = row.version
         return SagaInstanceMapper.desde_orm(row)
 
     def obtener_por_id_solicitud(self, id_solicitud: str) -> SagaInstance | None:
-        row = self._sesion().execute(
-            select(SagaInstanceORM).where(SagaInstanceORM.id_solicitud == id_solicitud)
-        ).scalar_one_or_none()
+        statement = select(SagaInstanceORM).where(SagaInstanceORM.id_solicitud == id_solicitud)
+        if self._lock_reads:
+            statement = statement.with_for_update()
+        row = self._sesion().execute(statement).scalar_one_or_none()
         if row is None:
             return None
         self._loaded_versions[row.id_saga] = row.version
@@ -134,12 +136,16 @@ class SqlAlchemyRepositorioSagaLog(RepositorioSagaLog):
         return [SagaLogMapper.desde_orm(row) for row in rows]
 
     def obtener_ultimo_por_saga(self, id_saga: str) -> SagaLog | None:
-        row = self._sesion().execute(
-            select(SagaLogORM)
-            .where(SagaLogORM.id_saga == id_saga)
-            .order_by(SagaLogORM.created_at.desc(), SagaLogORM.log_id.desc())
-            .limit(1)
-        ).scalar_one_or_none()
+        row = (
+            self._sesion()
+            .execute(
+                select(SagaLogORM)
+                .where(SagaLogORM.id_saga == id_saga)
+                .order_by(SagaLogORM.created_at.desc(), SagaLogORM.log_id.desc())
+                .limit(1)
+            )
+            .scalar_one_or_none()
+        )
         return SagaLogMapper.desde_orm(row) if row is not None else None
 
     def buscar_por_message_id(
@@ -149,13 +155,17 @@ class SqlAlchemyRepositorioSagaLog(RepositorioSagaLog):
         tipo_mensaje: str,
         message_id: str,
     ) -> SagaLog | None:
-        row = self._sesion().execute(
-            select(SagaLogORM).where(
-                SagaLogORM.id_saga == id_saga,
-                SagaLogORM.tipo_mensaje == tipo_mensaje,
-                or_(SagaLogORM.event_id == message_id, SagaLogORM.command_id == message_id),
+        row = (
+            self._sesion()
+            .execute(
+                select(SagaLogORM).where(
+                    SagaLogORM.id_saga == id_saga,
+                    SagaLogORM.tipo_mensaje == tipo_mensaje,
+                    or_(SagaLogORM.event_id == message_id, SagaLogORM.command_id == message_id),
+                )
             )
-        ).scalar_one_or_none()
+            .scalar_one_or_none()
+        )
         return SagaLogMapper.desde_orm(row) if row is not None else None
 
 

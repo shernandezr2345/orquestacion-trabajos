@@ -1,8 +1,12 @@
 # Orquestación de Trabajos
 
-POC de la entrega 4. Consume solicitudes de Entrada, crea un Trabajo y publica
-`TrabajoCreado.v1` y `SolicitarCotizacion.v1`. Aplica el resultado real de Cotizaciones
-y expone consultas HTTP. Cada servicio conserva su propia base.
+POC de HdA con Saga de atención. Consume solicitudes de Entrada, crea Trabajo/Saga,
+coordina cotización y seguimiento y registra el resultado en Entrada. Las compensaciones
+cancelan efectos reales y esperan confirmaciones de los participantes. Cada servicio
+conserva su propia base.
+
+[Auditoría y pruebas de integración de cinco servicios](../bff-partners/docs/evidencias/saga-real/README.md).
+Cambios locales verificados, sin commit. La consulta HTTP de Saga/Log sigue pendiente.
 
 ## Estructura
 
@@ -12,7 +16,7 @@ Todo el código instalable vive en `src/orquestacion_trabajos/`:
 - `config/rutas.py`: catálogo de fuentes (tópico y suscripción) y destinos de publicación.
 - `config/bootstrap.py`: construye handlers, consumidores y despacho con sus dependencias.
 - `config/persistencia.py`: compone la UoW y verifica los destinos pendientes.
-- `config/procesamiento.py`: compone cinco ciclos y coordina su cierre con presupuesto total.
+- `config/procesamiento.py`: compone 17 ciclos y coordina su cierre con presupuesto total.
 - `config/settings.py` y `database.py`: configuración y conexiones.
 - `modulos/trabajos/dominio/`: Trabajo y reglas de transición.
 - `modulos/trabajos/aplicacion/`: casos de uso y puertos; no importa SQL, Pulsar ni mapeadores de infraestructura.
@@ -32,11 +36,12 @@ export ORQUESTACION_DATABASE_URL='postgresql+psycopg://postgres:postgres@localho
 export ORQUESTACION_PULSAR_URL='pulsar://localhost:6650'
 export ORQUESTACION_ENABLE_LIFESPAN_CONSUMERS=true
 uv run --locked alembic upgrade head
-uv run --locked python scripts/preparar_pulsar.py
 uv run --locked uvicorn orquestacion_trabajos.api.app:create_app --factory --host 127.0.0.1 --port 8001
 ```
 
-Crear previamente la base elegida. `.env.example` es una plantilla: copiarla a `.env`
+Crear previamente la base elegida. El arranque prepara productores/consumidores con
+sus schemas Avro; el script histórico preparar_pulsar.py no debe usarse para
+reconfigurar tópicos con schemas ya registrados. `.env.example` es una plantilla: copiarla a `.env`
 no carga sus variables automáticamente. El arranque usa las variables exportadas.
 `ORQUESTACION_ENABLE_LIFESPAN_CONSUMERS=false` permite servir consultas sin mensajería; readiness responde 503.
 Sin `ORQUESTACION_DATABASE_URL`, liveness sigue disponible y las consultas responden 503.
@@ -80,7 +85,7 @@ python proyecto/entrega4/integracion/scripts/run_local.py
   repetir el mismo mensaje; la deduplicación pertenece al consumidor.
 - Los errores transitorios conocidos hacen NACK. Un mensaje contradictorio pausa el consumidor
   sin ACK; conservar la evidencia y corregir la causa antes de reiniciar.
-- Cinco ciclos no daemon: entrada, registrada, rechazada, TrabajoCreado y SolicitarCotizacion.
+- 17 ciclos no daemon: nueve consumidores de eventos y ocho despachos de outbox.
   La parada se señala a todos y comparte un presupuesto de 9 segundos. Cada hilo cierra su transporte.
   Si un hilo sigue vivo, el cierre falla visiblemente y no se dispone su engine.
 - Se mantienen tablas y variables de esta POC. El outbox conserva bloqueo SQL durante el envío

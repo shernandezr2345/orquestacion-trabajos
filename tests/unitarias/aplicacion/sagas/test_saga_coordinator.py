@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from uuid import UUID
+
 import pytest
-from sqlalchemy import Engine, create_engine
+from sqlalchemy import Engine, create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from orquestacion_trabajos.config.rutas import destinos
+from orquestacion_trabajos.config.settings import Settings
 from orquestacion_trabajos.modulos.sagas.aplicacion.coordinador import SagaCoordinator
 from orquestacion_trabajos.modulos.sagas.aplicacion.eventos import SagaMessageEnvelope
 from orquestacion_trabajos.modulos.sagas.dominio.entidades import (
@@ -28,13 +32,10 @@ from orquestacion_trabajos.modulos.trabajos.aplicacion.handlers.aplicar_cotizaci
 from orquestacion_trabajos.modulos.trabajos.aplicacion.handlers.crear_trabajo import (
     CrearTrabajoHandler,
 )
-from orquestacion_trabajos.modulos.trabajos.infraestructura.orm import Base
+from orquestacion_trabajos.modulos.trabajos.infraestructura.orm import Base, TrabajoORM
 from orquestacion_trabajos.seedwork.infraestructura.orm import OutboxORM
 
-DESTINOS = {
-    "TrabajoCreado.v1": "persistent://public/default/trabajo-creado-v1",
-    "SolicitarCotizacion.v1": "persistent://public/default/solicitar-cotizacion-v1",
-}
+DESTINOS = destinos(Settings())
 
 
 class CrearTrabajoFallaDespues(CrearTrabajoHandler):
@@ -1029,7 +1030,9 @@ def test_cotizacion_rechazada_con_seguimiento_abierto_espera_confirmaciones() ->
         assert saga is not None
         assert saga.estado == SagaStatus.COMPENSATING
         assert saga.paso_actual == SagaStepName.CANCELAR_SEGUIMIENTO_SI_APLICA
-        cmd_cancel_atencion = _ultimo_command_id(session, saga.id_saga, "RegistrarAtencionCancelada.v1")
+        cmd_cancel_atencion = _ultimo_command_id(
+            session, saga.id_saga, "RegistrarAtencionCancelada.v1"
+        )
         cmd_cancel_seguimiento = _ultimo_command_id(
             session, saga.id_saga, "CancelarSeguimientoTrabajo.v1"
         )
@@ -1168,7 +1171,9 @@ def test_causacion_historica_acepta_command_id_emitido_no_reciente() -> None:
         saga = repo.obtener_por_id_solicitud("sol-1")
         assert saga is not None
         cmd_atencion = _ultimo_command_id(session, saga.id_saga, "RegistrarAtencionCancelada.v1")
-        cmd_cancel_antiguo = _ultimo_command_id(session, saga.id_saga, "CancelarSeguimientoTrabajo.v1")
+        cmd_cancel_antiguo = _ultimo_command_id(
+            session, saga.id_saga, "CancelarSeguimientoTrabajo.v1"
+        )
         logs_repo.registrar(
             SagaLog(
                 id_saga=saga.id_saga,
@@ -1360,7 +1365,9 @@ def test_compensacion_espera_cancelacion_seguimiento_cuando_apertura_fue_solicit
         saga = SqlAlchemyRepositorioSagas(session).obtener_por_id_solicitud("sol-1")
         assert saga is not None
         assert saga.paso_actual == SagaStepName.CANCELAR_SEGUIMIENTO_SI_APLICA
-        cmd_cancel_atencion = _ultimo_command_id(session, saga.id_saga, "RegistrarAtencionCancelada.v1")
+        cmd_cancel_atencion = _ultimo_command_id(
+            session, saga.id_saga, "RegistrarAtencionCancelada.v1"
+        )
 
     coordinator.procesar(
         _envelope_atencion_cancelada(
@@ -1526,3 +1533,117 @@ def test_cotizacion_rechazada_no_emite_anular_cotizacion() -> None:
             and log.tipo_mensaje == "AnularCotizacion.v1"
             for log in logs
         )
+
+
+def test_opening_is_persisted_in_outbox_with_canonical_command_id() -> None:
+    engine = _engine()
+    sessions = sessionmaker(bind=engine, expire_on_commit=False)
+    coordinator = _crear_coordinator(sessions)
+    coordinator.procesar(_envelope_solicitud(), consumidor="entry")
+    with sessions() as session:
+        saga = session.scalars(select(SagaInstanceORM)).one()
+        command = (
+            session.scalars(select(OutboxORM).where(OutboxORM.tipo == "SolicitarCotizacion.v1"))
+            .one()
+            .payload
+        )
+    coordinator.procesar(
+        _envelope_cotizacion_registrada(
+            event_id="quote",
+            id_trabajo=str(saga.id_trabajo),
+            id_solicitud=saga.id_solicitud,
+            id_partner="par-1",
+            causacion=str(command["command_id"]),
+        ),
+        consumidor="quote",
+    )
+    with sessions() as session:
+        opening = session.scalars(
+            select(OutboxORM).where(OutboxORM.tipo == "AbrirSeguimientoTrabajo.v1")
+        ).one()
+        assert UUID(str(opening.payload["command_id"]))
+        assert opening.payload["id_partner"] == "par-1"
+        assert opening.payload["id_cotizacion"] == "cot-1"
+
+
+def test_rejection_cancels_persisted_work_and_publishes_compensation() -> None:
+    engine = _engine()
+    sessions = sessionmaker(bind=engine, expire_on_commit=False)
+    coordinator = _crear_coordinator(sessions)
+    coordinator.procesar(_envelope_solicitud(), consumidor="entry")
+    with sessions() as session:
+        saga = session.scalars(select(SagaInstanceORM)).one()
+        command = (
+            session.scalars(select(OutboxORM).where(OutboxORM.tipo == "SolicitarCotizacion.v1"))
+            .one()
+            .payload
+        )
+    coordinator.procesar(
+        _envelope_cotizacion_rechazada(
+            event_id="quote",
+            id_trabajo=str(saga.id_trabajo),
+            id_solicitud=saga.id_solicitud,
+            id_partner="par-1",
+            causacion=str(command["command_id"]),
+        ),
+        consumidor="quote",
+    )
+    with sessions() as session:
+        work = session.get(TrabajoORM, saga.id_trabajo)
+        assert work is not None and work.estado == "CANCELADO"
+        kinds = set(session.scalars(select(OutboxORM.tipo)))
+        assert {"TrabajoCancelado.v1", "RegistrarAtencionCancelada.v1"} <= kinds
+
+
+def test_transition_conflict_rolls_back_work_and_received_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from orquestacion_trabajos.modulos.sagas.aplicacion.coordinador import SagaConflictError
+
+    engine = _engine()
+    sessions = sessionmaker(bind=engine, expire_on_commit=False)
+    coordinator = _crear_coordinator(sessions)
+    coordinator.procesar(_envelope_solicitud(), consumidor="entry")
+    with sessions() as session:
+        saga = session.scalars(select(SagaInstanceORM)).one()
+        command = (
+            session.scalars(select(OutboxORM).where(OutboxORM.tipo == "SolicitarCotizacion.v1"))
+            .one()
+            .payload
+        )
+        assert saga.id_trabajo is not None
+
+    def failed_emission(*args: object, **kwargs: object) -> str:
+        raise SagaConflictError("Cannot construct command")
+
+    monkeypatch.setattr(coordinator, "_emitir_comando", failed_emission)
+    with pytest.raises(SagaConflictError):
+        coordinator.procesar(
+            _envelope_cotizacion_registrada(
+                event_id="quote-rollback",
+                id_trabajo=str(saga.id_trabajo),
+                id_solicitud=saga.id_solicitud,
+                id_partner="par-1",
+                causacion=str(command["command_id"]),
+            ),
+            consumidor="quote",
+        )
+    with sessions() as session:
+        work = session.get(TrabajoORM, saga.id_trabajo)
+        assert work is not None and work.estado == "PENDIENTE_COTIZACION"
+        assert (
+            session.scalar(select(SagaLogORM).where(SagaLogORM.event_id == "quote-rollback"))
+            is None
+        )
+
+
+def test_republished_request_with_new_event_id_does_not_duplicate_commands() -> None:
+    engine = _engine()
+    sessions = sessionmaker(bind=engine, expire_on_commit=False)
+    coordinator = _crear_coordinator(sessions)
+    coordinator.procesar(_envelope_solicitud(), consumidor="entry")
+    coordinator.procesar(_envelope_solicitud(event_id="republished"), consumidor="entry")
+    with sessions() as session:
+        assert session.query(OutboxORM).count() == 2
+        assert session.query(TrabajoORM).count() == 1
+        assert session.query(SagaInstanceORM).count() == 1
